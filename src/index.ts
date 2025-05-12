@@ -1,6 +1,27 @@
 // Import dotenv to load environment variables
 import * as dotenv from 'dotenv';
+import * as os from 'os'; // Import the os module
+
 dotenv.config(); // Load environment variables from .env file
+
+// Function to get and log local IP addresses
+function logIpAddresses() {
+    const networkInterfaces = os.networkInterfaces();
+    console.log("Local IP Addresses:");
+    for (const interfaceName in networkInterfaces) {
+        const MynetworkInterface = networkInterfaces[interfaceName];
+        if (MynetworkInterface) {
+            for (const iface of MynetworkInterface) {
+                // Skip over internal (i.e. 127.0.0.1) and non-ipv4 addresses
+                if (!iface.internal && iface.family === 'IPv4') {
+                    console.log(`  ${interfaceName}: ${iface.address}`);
+                }
+            }
+        }
+    }
+}
+
+logIpAddresses(); // Log IP addresses before starting the application
 
 // Log a message to the console indicating the application is starting.
 console.log("Starting the application...");
