@@ -1,4 +1,5 @@
 import axios from 'axios';
+import FormData from 'form-data'; // Import FormData
 
 const QBIT_URL = process.env.QBITTORRENT_URL;
 const QBIT_USERNAME = process.env.QBITTORRENT_USERNAME;
@@ -32,6 +33,7 @@ async function login(): Promise<boolean> {
                 if (sidCookie) {
                     sid = sidCookie ? sidCookie.split(';')[0] || '' : ''; // Ensure sid is always a string
                     console.log('Successfully logged into qBittorrent');
+                    console.log('Session ID (SID):', sid); // Add this line to log the SID
                     return true;
                 }
             }
@@ -140,6 +142,103 @@ async function getSeedingTorrents(): Promise<GetTorrentsResult> {
     return { torrents: [] }; // Should not happen if no error and no torrents
 }
 
+async function addTorrentByMagnet(magnetUrl: string, savePath?: string): Promise<{ success: boolean; error?: string }> {
+    if (!sid) {
+        console.log("SID not found, attempting to login to qBittorrent...");
+        const loggedIn = await login();
+        if (!loggedIn) {
+            return { success: false, error: 'Failed to login to qBittorrent. Check credentials and qBittorrent WebUI settings.' };
+        }
+    }
+    if (!QBIT_URL) {
+         return { success: false, error: 'qBittorrent URL not configured.' };
+    }
+
+    const formData = new FormData();
+    formData.append('urls', magnetUrl);
+
+    if (savePath) {
+        formData.append('savepath', savePath);
+    }
+    // Add other parameters as needed, e.g., category, tags, etc.
+    // formData.append('category', 'myCategory');
+    // formData.append('tags', 'tag1,tag2');
+
+    try {
+        const generatedHeaders = formData.getHeaders(); // Get generated headers
+        console.log('[addTorrentByMagnet] SID being used:', sid); // Log the SID
+        console.log('[addTorrentByMagnet] FormData Headers:', JSON.stringify(generatedHeaders, null, 2)); // Log the generated headers
+
+        const response = await axios.post(
+            `${QBIT_URL}/api/v2/torrents/add`,
+            formData,
+            {
+                headers: {
+                    ...generatedHeaders, // Important for multipart/form-data
+                    Cookie: sid,
+                },
+            }
+        );
+
+        // The API responds with "Ok." on success or "Fails." on failure, both with status 200.
+        if (response.status === 200 && response.data && response.data.trim() === "Ok.") {
+            return { success: true };
+        } else if (response.status === 200 && response.data && response.data.trim() === "Fails.") {
+            console.error('qBittorrent API reported "Fails." for adding torrent. Magnet:', magnetUrl, 'SavePath:', savePath, 'Raw Response:', response.data);
+            return { success: false, error: 'qBittorrent reported "Fails." This could be due to the magnet link being invalid, already added, or an issue with qBittorrent\'s default save path / permissions. Check qBittorrent logs if possible.' };
+        }
+        // Handle other unexpected responses
+        console.error('Failed to add torrent. Status:', response.status, 'Data:', response.data);
+        return { success: false, error: `Failed to add torrent. Status: ${response.status}, Response: ${response.data}` };
+
+    } catch (error: any) {
+        if (axios.isAxiosError(error) && error.response) {
+            // Handle 403 Forbidden - session might have expired
+            if (error.response.status === 403) {
+                console.log('qBittorrent session likely expired (403 Forbidden) while adding torrent, attempting re-login...');
+                sid = ''; // Clear SID
+                const loggedIn = await login();
+                if (loggedIn && QBIT_URL) {
+                    // Retry the request once after re-login
+                    try {
+                        const formData = new FormData();
+                        formData.append('urls', magnetUrl);
+                        if (savePath) {
+                            formData.append('savepath', savePath);
+                        }
+                        const retryResponse = await axios.post(`${QBIT_URL}/api/v2/torrents/add`, formData, {
+                             headers: {
+                                ...formData.getHeaders(),
+                                Cookie: sid,
+                            },
+                        });
+                        if (retryResponse.status === 200 && retryResponse.data && typeof retryResponse.data === 'string' && retryResponse.data.trim().toLowerCase() === "ok.") {
+                            console.log(`Successfully sent magnet URL to qBittorrent after re-login: ${magnetUrl}`);
+                            return { success: true };
+                        } else {
+                             console.error('Failed to add torrent via magnet after re-login. Status:', retryResponse.status, 'Raw Response Data:', JSON.stringify(retryResponse.data)); // Enhanced logging
+                            return { success: false, error: `Failed to add torrent after re-login. Status: ${retryResponse.status}, Response: ${JSON.stringify(retryResponse.data)}` }; // Include response data in error
+                        }
+                    } catch (retryError: any) {
+                        if (axios.isAxiosError(retryError) && retryError.response) {
+                            console.error('Error adding torrent after re-login:', retryError.response.status, retryError.response.data);
+                            return { success: false, error: `Error adding torrent after re-login: ${retryError.response.status}` };
+                        }
+                        console.error('Error adding torrent after re-login:', retryError.message);
+                        return { success: false, error: 'Error adding torrent after re-login' };
+                    }
+                } else {
+                    return { success: false, error: 'Failed to re-login to qBittorrent after session expiry while adding torrent.' };
+                }
+            }
+            console.error('Error adding torrent via magnet:', error.response.status, error.response.data);
+            return { success: false, error: `Error adding torrent: ${error.response.status}` };
+        }
+        console.error('Error adding torrent via magnet:', error.message);
+        return { success: false, error: 'Error adding torrent' };
+    }
+}
+
 // Add other functions like addTorrent, pauseTorrent, etc. as needed
 
-export { login as qbitLogin, getTorrents as qbitGetTorrents, getSeedingTorrents as qbitGetSeedingTorrents };
+export { login as qbitLogin, getTorrents as qbitGetTorrents, getSeedingTorrents as qbitGetSeedingTorrents, addTorrentByMagnet as qbitAddTorrentByMagnet };
