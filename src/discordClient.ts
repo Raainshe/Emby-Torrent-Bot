@@ -1,11 +1,14 @@
 // Import necessary classes and types from the discord.js library.
-import { Client, Events, GatewayIntentBits, Message, SlashCommandBuilder, REST, Routes, Collection, type Interaction, type CacheType, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ComponentType } from "discord.js";
+import { Client, Events, GatewayIntentBits, Message, SlashCommandBuilder, REST, Routes, Collection, type Interaction, type CacheType, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ComponentType, AttachmentBuilder } from "discord.js";
 // Import qBittorrent functions
 import { qbitLogin, qbitGetTorrents, qbitGetSeedingTorrents, qbitAddTorrentByMagnet, qbitGetTorrentByHash, type TorrentInfo, qbitDeleteTorrents } from './qbittorrent';
 // Import utility functions
-import { createProgressBar, formatDuration, formatSpeed } from './utils/displayUtils';
+import { createProgressBar, formatDuration, formatSpeed, formatSize } from './utils/displayUtils';
 import { addLogEntry, getRecentLogs } from './utils/logUtils'; // Import logging functions
 import dotenv from 'dotenv';
+import * as diskusage from 'diskusage'; // For disk space
+import { ChartJSNodeCanvas } from 'chartjs-node-canvas'; // For chart generation
+import os from 'os'; // To determine default path based on OS
 
 dotenv.config();
 
@@ -51,6 +54,24 @@ function normalizePathForComparison(path: string): string {
     }
     // Convert to lowercase for case-insensitive comparison
     return normalized.toLowerCase();
+}
+
+// New helper function to convert Windows path to WSL path if needed
+function convertWindowsPathToWslPath(windowsPath: string): string {
+    // Regex to capture drive letter and the rest of the path
+    // Allows for C:\path or C:/path
+    const match = windowsPath.match(/^([a-zA-Z]):[\\/](.*)/);
+
+    // Ensure match is not null and the necessary capture groups are present and are strings
+    if (match && typeof match[1] === 'string' && typeof match[2] === 'string') {
+        const driveLetter = match[1].toLowerCase();
+        // Replace backslashes with forward slashes for the rest of the path
+        const restOfPath = match[2].replace(/\\/g, '/');
+        return `/mnt/${driveLetter}/${restOfPath}`;
+    }
+    // If not a standard Windows path (e.g., C:\...) or regex doesn't match as expected,
+    // return the original path.
+    return windowsPath;
 }
 
 // Helper function to extract display name (dn) from magnet link
@@ -105,6 +126,12 @@ const slashCommands = [
             option.setName('delete_files')
                 .setDescription('Whether to delete the files from disk along with the torrent')
                 .setRequired(true)),
+    new SlashCommandBuilder().setName('diskspace')
+        .setDescription('Shows disk space usage for a path with a pie chart.')
+        .addStringOption(option =>
+            option.setName('path')
+                .setDescription('Optional: The path to check (e.g., / or C:). Defaults to configured path or OS root.')
+                .setRequired(false)),
     new SlashCommandBuilder().setName('logs').setDescription('Displays the last 20 log entries.'),
     new SlashCommandBuilder().setName('help').setDescription('Displays the list of available commands.')
 ];
@@ -383,6 +410,113 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
                 components: [row, buttonRow],
             });
             addLogEntry(user, `/${commandName}`, `Presented ${options.length} torrents for deletion selection in category ${category}.`);
+
+        } else if (commandName === 'diskspace') {
+            const userPathOption = interaction.options.getString('path'); // string | null
+            let determinedPath: string;
+
+            if (userPathOption && userPathOption.trim() !== '') {
+                determinedPath = userPathOption;
+            } else {
+                const envPath = process.env.DISK_SPACE_CHECK_PATH;
+                if (envPath && envPath.trim() !== '') {
+                    determinedPath = envPath;
+                } else {
+                    determinedPath = os.platform() === 'win32' ? 'C:\\' : '/';
+                    addLogEntry('System', `/${commandName}`, `DISK_SPACE_CHECK_PATH or user path not set/empty, using OS default: ${determinedPath}`);
+                }
+            }
+
+            let finalPathToCheck = determinedPath;
+            let pathLogInfo = determinedPath;
+
+            // If running on Linux (e.g., WSL) and the path looks like a Windows path, convert it.
+            if (os.platform() === 'linux' && /^[a-zA-Z]:[\\/]/.test(determinedPath)) {
+                finalPathToCheck = convertWindowsPathToWslPath(determinedPath);
+                if (finalPathToCheck !== determinedPath) { // Log if conversion happened
+                    pathLogInfo = `${determinedPath} (converted to ${finalPathToCheck} for WSL)`;
+                }
+            }
+
+            addLogEntry(user, `/${commandName}`, `Requested disk space. Path to check: ${pathLogInfo}. User override: ${userPathOption || 'none'}`);
+            await interaction.deferReply();
+
+            try {
+                const usage = await diskusage.check(finalPathToCheck);
+                const usedSpace = usage.total - usage.available;
+
+                const replyText = 
+                    `**Disk Space for path: \`\`${determinedPath}\`\`** (Actual checked: \`\`${finalPathToCheck}\`\`)\n` +
+                    `Total: ${formatSize(usage.total)}\n` +
+                    `Available: ${formatSize(usage.available)}\n` +
+                    `Used: ${formatSize(usedSpace)} (${((usedSpace / usage.total) * 100).toFixed(2)}%)\n` +
+                    `Free (overall reported by OS): ${formatSize(usage.free)}`;
+
+                const width = 450; // px
+                const height = 250; // px
+                const chartJSNodeCanvas = new ChartJSNodeCanvas({ 
+                    width, 
+                    height, 
+                    backgroundColour: '#FFFFFF',
+                    plugins: {
+                        globalVariableLegacy: ['chartjs-adapter-date-fns'] 
+                    }
+                });
+
+                const configuration = {
+                    type: 'pie' as const,
+                    data: {
+                        labels: ['Available', 'Used'],
+                        datasets: [{
+                            label: 'Disk Space',
+                            data: [usage.available, usedSpace],
+                            backgroundColor: [
+                                'rgba(75, 192, 192, 0.7)', 
+                                'rgba(255, 99, 132, 0.7)'
+                            ],
+                            borderColor: [
+                                'rgba(75, 192, 192, 1)',
+                                'rgba(255, 99, 132, 1)'
+                            ],
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: false, 
+                        plugins: {
+                            legend: {
+                                position: 'top' as const,
+                            },
+                            title: {
+                                display: true,
+                                text: `Disk Usage: ${finalPathToCheck}`,
+                                font: {
+                                    size: 16
+                                }
+                            }
+                        }
+                    }
+                };
+
+                const imageBuffer = await chartJSNodeCanvas.renderToBuffer(configuration);
+                const attachment = new AttachmentBuilder(imageBuffer, { name: 'disk-space-chart.png' });
+
+                await interaction.editReply({ content: replyText, files: [attachment] });
+                addLogEntry(user, `/${commandName}`, `Successfully displayed disk space for ${finalPathToCheck} (original requested: ${determinedPath}).`);
+
+            } catch (error: any) {
+                let errorMessage = `Failed to get disk space information for \`\`${finalPathToCheck}\`\`.`;
+                if (error && typeof error.message === 'string' && error.message.includes('ENOENT')) {
+                    errorMessage = `Error: The path \`\`${finalPathToCheck}\`\` was not found or is not accessible. Please ensure the path is correct and accessible from the bot's environment. If running in WSL, Windows paths like C:\\folder should be accessible as /mnt/c/folder.`;
+                } else if (error && typeof error.message === 'string') {
+                    errorMessage = `Error getting disk space for \`\`${finalPathToCheck}\`\`: ${error.message}`;
+                } else {
+                    errorMessage = `An unexpected error occurred while checking disk space for \`\`${finalPathToCheck}\`\`.`;
+                }
+                console.error(`Error getting disk space for ${finalPathToCheck} (original requested: ${determinedPath}):`, error);
+                await interaction.editReply(errorMessage);
+                addLogEntry(user, `/${commandName}`, `Error for path ${finalPathToCheck} (original requested: ${determinedPath}): ${errorMessage}`);
+            }
 
         } else if (commandName === 'logs') {
             addLogEntry(user, `/${commandName}`, 'Requesting last 20 log entries');

@@ -16,6 +16,19 @@ export function formatSpeed(bytes: number): string {
 }
 
 /**
+ * Formats bytes into a human-readable string (B, KB, MB, GB, TB).
+ * @param bytes The number of bytes.
+ * @returns A string representing the size.
+ */
+export function formatSize(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+/**
  * Creates a text-based progress bar.
  * @param progress A number between 0 and 1 representing the progress.
  * @param dlspeed Download speed in bytes per second.
