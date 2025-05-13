@@ -7,7 +7,7 @@ const BAR_LENGTH = 20; // Length of the progress bar in characters
  * @param bytes The number of bytes.
  * @returns A string representing the speed.
  */
-function formatSpeed(bytes: number): string {
+export function formatSpeed(bytes: number): string {
     if (bytes === 0) return '0 B/s';
     const k = 1024;
     const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];

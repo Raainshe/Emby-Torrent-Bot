@@ -1,5 +1,7 @@
+import { addLogEntry } from './utils/logUtils';
 import axios from 'axios';
 import FormData from 'form-data'; // Import FormData
+import https from 'https'; // Added for potential future use with https.Agent
 
 // Add a request interceptor for debugging
 // axios.interceptors.request.use(request => {
@@ -347,6 +349,72 @@ async function addTorrentByMagnet(magnetUrl: string, savePath?: string): Promise
             return { success: false, error: `Error adding torrent: ${error.response.status}` };
         }
         return { success: false, error: 'Error adding torrent' };
+    }
+}
+
+/**
+ * Deletes torrents from qBittorrent.
+ * @param hashes An array of torrent hashes to delete.
+ * @param deleteFiles Whether to delete the files from disk.
+ * @returns True if the deletion was successful, false otherwise.
+ */
+export async function qbitDeleteTorrents(hashes: string[], deleteFiles: boolean): Promise<boolean> {
+    if (!sid) {
+        await login(); // Changed from qbitLogin() to login()
+        if (!sid) {
+            addLogEntry('System', 'qbitDeleteTorrents', 'Login failed, cannot delete torrents.');
+            return false;
+        }
+    }
+
+    const qbUrl = process.env.QBITTORRENT_URL;
+    if (!qbUrl) {
+        addLogEntry('System', 'qbitDeleteTorrents', 'qBittorrent URL is not configured.');
+        return false;
+    }
+
+    // Construct the data as application/x-www-form-urlencoded
+    const params = new URLSearchParams();
+    params.append('hashes', hashes.join('|'));
+    params.append('deleteFiles', deleteFiles.toString());
+
+    try {
+        const response = await axios.post(
+            `${qbUrl}/api/v2/torrents/delete`, 
+            params.toString(), // Send as URL-encoded string
+            {
+                headers: {
+                    // Set Content-Type to application/x-www-form-urlencoded
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Cookie': sid,
+                },
+            }
+        );
+
+        if (response.status === 200) {
+            addLogEntry('System', 'qbitDeleteTorrents', `Successfully deleted torrents: ${hashes.join(', ')}. Delete files: ${deleteFiles}`);
+            return true;
+        } else {
+            addLogEntry('System', 'qbitDeleteTorrents', `Failed to delete torrents. Status: ${response.status} - ${response.data}`);
+            return false;
+        }
+    } catch (error: any) { // Explicitly type error as any or a more specific error type
+        // Log more detailed error information if available
+        let errorMessage = 'Unknown error';
+        if (error.response) {
+            // The request was made and the server responded with a status code
+            // that falls out of the range of 2xx
+            errorMessage = `AxiosError: Request failed with status code ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`;
+        } else if (error.request) {
+            // The request was made but no response was received
+            errorMessage = 'AxiosError: No response received from qBittorrent.';
+        } else {
+            // Something happened in setting up the request that triggered an Error
+            errorMessage = error.message;
+        }
+        console.error('Error deleting torrents:', error); // Keep console.error for detailed object logging
+        addLogEntry('System', 'qbitDeleteTorrents', `Error deleting torrents: ${errorMessage}`);
+        return false;
     }
 }
 
