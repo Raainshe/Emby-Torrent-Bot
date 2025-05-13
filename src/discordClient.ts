@@ -100,11 +100,11 @@ const slashCommands = [
         .setDescription('Adds a new torrent using the provided magnet link.')
         .addStringOption(option =>
             option.setName('link')
-                .setDescription('The magnet link')
+                .setDescription('The magnet link of the torrent to add.')
                 .setRequired(true))
-        .addStringOption(option => // New category option
+        .addStringOption(option =>
             option.setName('category')
-                .setDescription('The category of the torrent (defaults to series)')
+                .setDescription('The category for the download (determines save path).')
                 .setRequired(false)
                 .addChoices(
                     { name: 'Series', value: 'series' },
@@ -112,10 +112,10 @@ const slashCommands = [
                     { name: 'Anime', value: 'anime' }
                 )),
     new SlashCommandBuilder().setName('delete')
-        .setDescription('Deletes torrents from qBittorrent.')
+        .setDescription('Deletes a torrent from qBittorrent, optionally with files.')
         .addStringOption(option =>
             option.setName('category')
-                .setDescription('The category of torrents to list for deletion')
+                .setDescription('The category of torrents to list for deletion.')
                 .setRequired(true)
                 .addChoices(
                     { name: 'Series', value: 'series' },
@@ -124,16 +124,16 @@ const slashCommands = [
                 ))
         .addBooleanOption(option =>
             option.setName('delete_files')
-                .setDescription('Whether to delete the files from disk along with the torrent')
+                .setDescription('Whether to delete the files from disk as well.')
                 .setRequired(true)),
     new SlashCommandBuilder().setName('diskspace')
-        .setDescription('Shows disk space usage for a path with a pie chart.')
+        .setDescription('Shows disk space usage for a specified path or default path.')
         .addStringOption(option =>
             option.setName('path')
-                .setDescription('Optional: The path to check (e.g., / or C:). Defaults to configured path or OS root.')
+                .setDescription('The path to check disk space for (e.g., /mnt/c/downloads or C:\\\\Downloads).')
                 .setRequired(false)),
-    new SlashCommandBuilder().setName('logs').setDescription('Displays the last 20 log entries.'),
-    new SlashCommandBuilder().setName('help').setDescription('Displays the list of available commands.')
+    new SlashCommandBuilder().setName('logs').setDescription('Displays the most recent bot activity logs.'),
+    new SlashCommandBuilder().setName('help').setDescription('Displays a list of all available slash commands and their descriptions.')
 ];
 
 const availableCommandHelp = slashCommands.map(cmd => ({ name: `/${cmd.name}`, description: cmd.description }));
@@ -489,7 +489,10 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
                             },
                             title: {
                                 display: true,
-                                text: `Disk Usage: ${finalPathToCheck}`,
+                                text: [
+                                    `Disk Usage: ${finalPathToCheck}`,
+                                    `(${((usedSpace / usage.total) * 100).toFixed(2)}% Used)`
+                                ],
                                 font: {
                                     size: 16
                                 }
