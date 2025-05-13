@@ -51,10 +51,56 @@ async function login(): Promise<boolean> {
     }
 }
 
-interface TorrentInfo {
+export interface TorrentInfo {
+    added_on: number;
+    amount_left: number;
+    auto_tmm: boolean;
+    availability: number;
+    category: string;
+    completed: number;
+    completion_on: number;
+    content_path: string;
+    dl_limit: number;
+    dlspeed: number; // Download speed in B/s
+    download_path: string;
+    downloaded: number;
+    downloaded_session: number;
+    eta: number;
+    f_l_piece_prio: boolean;
+    force_start: boolean;
+    hash: string;
+    infohash_v1: string;
+    infohash_v2: string;
+    last_activity: number;
+    magnet_uri: string;
+    max_ratio: number;
+    max_seeding_time: number;
     name: string;
+    num_complete: number; // Total number of seeds in the swarm (available globally)
+    num_incomplete: number; // Total number of leechers in the swarm (available globally)
+    num_leechs: number; // Connected leechers
+    num_seeds: number; // Connected seeds
+    priority: number;
+    progress: number;
+    ratio: number;
+    ratio_limit: number;
+    save_path: string;
+    seeding_time: number;
+    seeding_time_limit: number;
+    seen_complete: number;
+    seq_dl: boolean;
+    size: number;
     state: string;
-    // Add other torrent properties you might need
+    super_seeding: boolean;
+    tags: string;
+    time_active: number;
+    total_size: number;
+    tracker: string;
+    trackers_count: number;
+    up_limit: number;
+    uploaded: number;
+    uploaded_session: number;
+    upspeed: number;
 }
 
 interface GetTorrentsResult {
@@ -129,7 +175,56 @@ async function getSeedingTorrents(): Promise<GetTorrentsResult> {
     return { torrents: [] }; // Should not happen if no error and no torrents
 }
 
-async function addTorrentByMagnet(magnetUrl: string, savePath?: string): Promise<{ success: boolean; error?: string }> {
+async function getTorrentByHash(hash: string): Promise<TorrentInfo | undefined> {
+    if (!sid) {
+        const loggedIn = await login();
+        if (!loggedIn) {
+            // Cannot log in, so cannot fetch torrent
+            return undefined;
+        }
+    }
+    if (!QBIT_URL) {
+        return undefined;
+    }
+
+    try {
+        const response = await axios.get<TorrentInfo[]>(`${QBIT_URL}/api/v2/torrents/info`, {
+            params: {
+                hashes: hash // qBittorrent API can filter by one or more hashes
+            },
+            headers: {
+                Cookie: sid,
+            },
+        });
+        if (response.data && response.data.length > 0) {
+            return response.data[0]; // Return the first torrent matching the hash
+        }
+        return undefined; // No torrent found with that hash
+    } catch (error: any) {
+        if (axios.isAxiosError(error) && error.response && error.response.status === 403) {
+            sid = ''; 
+            const loggedIn = await login();
+            if (loggedIn && QBIT_URL) {
+                try {
+                    const retryResponse = await axios.get<TorrentInfo[]>(`${QBIT_URL}/api/v2/torrents/info`, {
+                        params: { hashes: hash },
+                        headers: { Cookie: sid },
+                    });
+                    if (retryResponse.data && retryResponse.data.length > 0) {
+                        return retryResponse.data[0];
+                    }
+                    return undefined;
+                } catch (retryError: any) {
+                    return undefined;
+                }
+            }
+        }
+        // console.error(`Error fetching torrent by hash ${hash}:`, error.message); // Keep this commented for now
+        return undefined;
+    }
+}
+
+async function addTorrentByMagnet(magnetUrl: string, savePath?: string): Promise<{ success: boolean; error?: string; torrent?: TorrentInfo }> {
     // Force a fresh login attempt to ensure the SID is current for this operation
     const loggedIn = await login(); // This will update the global 'sid' variable
     if (!loggedIn) {
@@ -170,7 +265,29 @@ async function addTorrentByMagnet(magnetUrl: string, savePath?: string): Promise
 
         // The API responds with "Ok." on success or "Fails." on failure, both with status 200.
         if (response.status === 200 && response.data && response.data.trim() === "Ok.") {
-            return { success: true };
+            // Torrent added successfully, now try to fetch its details
+            // Wait a brief moment for qBittorrent to process the new torrent
+            await new Promise(resolve => setTimeout(resolve, 1500)); // 1.5 second delay
+
+            const torrentsResult = await getTorrents();
+            if (torrentsResult.torrents && torrentsResult.torrents.length > 0) {
+                // Find the most recently added torrent
+                let newlyAddedTorrent = torrentsResult.torrents.reduce((latest, current) => {
+                    return (latest.added_on > current.added_on) ? latest : current;
+                });
+
+                // A more robust check could involve comparing magnetUrl or hash if available
+                // For now, assuming the latest 'added_on' is the one we just added.
+                // We also need to ensure it was added very recently.
+                const now = Math.floor(Date.now() / 1000);
+                if (newlyAddedTorrent && (now - newlyAddedTorrent.added_on < 10)) { // Added in the last 10 seconds
+                     return { success: true, torrent: newlyAddedTorrent };
+                } else {
+                    // Could not definitively identify the newly added torrent, but it was added.
+                    return { success: true }; 
+                }
+            }
+            return { success: true }; // Successfully added, but couldn't fetch specific torrent info
         } else if (response.status === 200 && response.data && response.data.trim() === "Fails.") {
             return { success: false, error: 'qBittorrent reported "Fails." This could be due to the magnet link being invalid, already added, or an issue with qBittorrent\'s default save path / permissions. Check qBittorrent logs if possible.' };
         }
@@ -204,6 +321,18 @@ async function addTorrentByMagnet(magnetUrl: string, savePath?: string): Promise
                              headers: retryRequestHeaders,
                         });
                         if (retryResponse.status === 200 && retryResponse.data && typeof retryResponse.data === 'string' && retryResponse.data.trim().toLowerCase() === "ok.") {
+                            // Similar logic to fetch torrent info after successful retry
+                            await new Promise(resolve => setTimeout(resolve, 1500));
+                            const torrentsResult = await getTorrents();
+                            if (torrentsResult.torrents && torrentsResult.torrents.length > 0) {
+                                let newlyAddedTorrent = torrentsResult.torrents.reduce((latest, current) => {
+                                    return (latest.added_on > current.added_on) ? latest : current;
+                                });
+                                const now = Math.floor(Date.now() / 1000);
+                                if (newlyAddedTorrent && (now - newlyAddedTorrent.added_on < 10)) {
+                                    return { success: true, torrent: newlyAddedTorrent };
+                                }
+                            }
                             return { success: true };
                         } else {
                             return { success: false, error: `Failed to add torrent after re-login. Status: ${retryResponse.status}, Response: ${JSON.stringify(retryResponse.data)}` }; // Include response data in error
@@ -223,4 +352,4 @@ async function addTorrentByMagnet(magnetUrl: string, savePath?: string): Promise
 
 // Add other functions like addTorrent, pauseTorrent, etc. as needed
 
-export { login as qbitLogin, getTorrents as qbitGetTorrents, getSeedingTorrents as qbitGetSeedingTorrents, addTorrentByMagnet as qbitAddTorrentByMagnet };
+export { login as qbitLogin, getTorrents as qbitGetTorrents, getSeedingTorrents as qbitGetSeedingTorrents, addTorrentByMagnet as qbitAddTorrentByMagnet, getTorrentByHash as qbitGetTorrentByHash };
