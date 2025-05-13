@@ -1,18 +1,16 @@
-// Import dotenv to load environment variables
 import * as dotenv from 'dotenv';
 dotenv.config(); // Load environment variables from .env file
 
-// Import utility functions
-import { logIpAddresses } from './utils/networkUtils';
-
-// Import Discord client and startup function
 import { startDiscordBot } from './discordClient';
+import { getIPAddress } from './utils/networkUtils'; // Corrected import path
 
-// Log IP addresses before starting the application
-logIpAddresses();
-
-// Log a message to the console indicating the application is starting.
-console.log("Starting the application...");
+// Log the IP address at startup
+const ipAddress = getIPAddress();
+// if (ipAddress) {
+//     console.log(`Local IP Address: ${ipAddress}`);
+// } else {
+//     console.log("Could not determine local IP address.");
+// }
 
 // Start the Discord bot
 startDiscordBot();

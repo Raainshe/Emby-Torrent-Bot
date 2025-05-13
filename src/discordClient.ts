@@ -15,26 +15,24 @@ const client = new Client({
 
 // Register an event listener for the ClientReady event.
 client.once(Events.ClientReady, async (readyClient) => {
-    console.log("Logged in as " + readyClient.user?.tag);
-
     // Attempt to log in to qBittorrent when the bot is ready
-    console.log("Attempting to login to qBittorrent...");
     const qbitLoggedIn = await qbitLogin();
     if (qbitLoggedIn) {
-        console.log("Initial login to qBittorrent successful.");
     } else {
-        console.warn("Initial login to qBittorrent failed. Check .env configuration and qBittorrent status.");
+        console.warn("Initial login to qBittorrent failed. Check .env configuration and qBittorrent status."); // Kept this warn as it's a startup issue
     }
 });
 
 // Register an event listener for the MessageCreate event.
 client.on(Events.MessageCreate, async (message: Message) => {
-    console.log(`${message.author.tag} said: ${message.content}`);
-
     if (message.author.bot) return;
+    if (!message.content.startsWith(process.env.DISCORD_PREFIX || '!')) return;
+
+    const args = message.content.slice((process.env.DISCORD_PREFIX || '!').length).trim().split(/ +/);
+    const command = args.shift()?.toLowerCase();
 
     // Command to list torrents
-    if (message.content.toLowerCase() === '!torrents') {
+    if (command === 'torrents') {
         const result = await qbitGetTorrents();
         if (result.error) {
             message.reply(`Error fetching torrents: ${result.error}`);
@@ -55,7 +53,7 @@ client.on(Events.MessageCreate, async (message: Message) => {
     }
 
     // Command to list seeding torrents
-    if (message.content.toLowerCase() === '/seed' || message.content.toLowerCase() === '!seed') {
+    if (command === 'seed') {
         const result = await qbitGetSeedingTorrents();
         if (result.error) {
             message.reply(`Error fetching seeding torrents: ${result.error}`);
@@ -76,34 +74,34 @@ client.on(Events.MessageCreate, async (message: Message) => {
     }
 
     // Command to add a torrent via magnet URL
-    const addMagnetPrefix = '!addmagnet ';
-    if (message.content.toLowerCase().startsWith(addMagnetPrefix)) {
-        const magnetUrl = message.content.substring(addMagnetPrefix.length).trim();
-        if (!magnetUrl) {
-            message.reply('Please provide a magnet URL after the command. Usage: `!addmagnet <magnet_url>`');
+    if (command === 'addmagnet') {
+        if (!args.length) {
+            message.reply('Please provide a magnet URL. Usage: !addmagnet <magnet_url>');
             return;
         }
-        if (!magnetUrl.startsWith('magnet:?xt=urn:btih:')) {
-            message.reply('Invalid magnet URL format. It should start with `magnet:?xt=urn:btih:`');
-            return;
-        }
-        message.reply(`Attempting to add torrent: ${magnetUrl} (using default save path)`);
-        const result = await qbitAddTorrentByMagnet(magnetUrl);
+        const magnetUrl = args[0];
+        // Use the default save path from .env, or undefined if not set
+        const defaultSavePath = process.env.QBITTORRENT_DEFAULT_SAVE_PATH ?? '';
+
+        message.reply(`Attempting to add magnet: ${magnetUrl}` + (defaultSavePath ? ` with save path: ${defaultSavePath}` : ''));
+        
+        // Pass defaultSavePath directly. If it's undefined, qbitAddTorrentByMagnet will handle it.
+        const result = await qbitAddTorrentByMagnet(magnetUrl, defaultSavePath || '');
         if (result.success) {
-            message.reply(`Successfully added torrent to qBittorrent. It will be saved in the default location.`);
+            message.reply('Successfully sent magnet link to qBittorrent.');
         } else {
-            message.reply(`Failed to add torrent: ${result.error || 'Unknown error'}`);
+            message.reply(`Failed to add torrent: ${result.error}`);
         }
     }
 });
 
 export function startDiscordBot() {
     if (!process.env.DISCORD_BOT_TOKEN) {
-        console.error("Error: DISCORD_BOT_TOKEN is not defined in the .env file.");
+        console.error("Error: DISCORD_BOT_TOKEN is not defined in the .env file."); // Kept this error as it's critical
         process.exit(1);
     }
     client.login(process.env.DISCORD_BOT_TOKEN).catch(error => {
-        console.error("Failed to login to Discord:", error);
+        console.error("Failed to login to Discord:", error); // Kept this error as it's critical
         process.exit(1);
     });
 }
