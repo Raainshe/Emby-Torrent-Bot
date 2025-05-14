@@ -435,10 +435,18 @@ export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
     }
 
     const hashesString = hashes.join('|');
+    const endpointPath = 'api/v2/torrents/pause';
+    let requestUrl: string;
+    try {
+        requestUrl = new URL(endpointPath, QBIT_URL).toString();
+    } catch (e) {
+        addLogEntry('System', 'qbitPauseTorrents', `Invalid QBITTORRENT_URL: ${QBIT_URL}`);
+        return false;
+    }
 
     try {
         const response = await axios.post(
-            `${QBIT_URL}/api/v2/torrents/pause`,
+            requestUrl,
             new URLSearchParams({ hashes: hashesString }).toString(), // Send as application/x-www-form-urlencoded
             {
                 headers: {
@@ -448,8 +456,6 @@ export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
             }
         );
 
-        // The API responds with status 200 on success, even if some hashes were not found or already paused.
-        // A more robust check might involve verifying torrent states after, but for pausing, 200 is usually sufficient.
         if (response.status === 200) {
             addLogEntry('System', 'qbitPauseTorrents', `Successfully sent pause command for ${hashes.length} torrent(s).`);
             return true;
@@ -465,7 +471,7 @@ export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
                 // Retry the request once after re-login
                 try {
                     const retryResponse = await axios.post(
-                        `${QBIT_URL}/api/v2/torrents/pause`,
+                        requestUrl, // Use the same robustly constructed URL
                         new URLSearchParams({ hashes: hashesString }).toString(),
                         {
                             headers: {
