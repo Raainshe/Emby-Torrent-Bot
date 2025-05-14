@@ -419,83 +419,80 @@ export async function qbitDeleteTorrents(hashes: string[], deleteFiles: boolean)
 }
 
 export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
-    if (hashes.length === 0) {
-        return true; // Nothing to pause
-    }
     if (!sid) {
-        const loggedIn = await login();
-        if (!loggedIn) {
-            addLogEntry('System', 'qbitPauseTorrents', 'Failed to login to qBittorrent before pausing torrents.');
+        await login();
+        if (!sid) {
+            addLogEntry('System', 'qbitPauseTorrents', 'Login failed, cannot pause torrents.');
             return false;
         }
     }
-    if (!QBIT_URL) {
-        addLogEntry('System', 'qbitPauseTorrents', 'qBittorrent URL not configured.');
+
+    const qbUrl = process.env.QBITTORRENT_URL;
+    if (!qbUrl) {
+        addLogEntry('System', 'qbitPauseTorrents', 'qBittorrent URL is not configured.');
         return false;
     }
 
-    const hashesString = hashes.join('|');
-    const endpointPath = 'api/v2/torrents/pause';
-    let requestUrl: string;
-    try {
-        requestUrl = new URL(endpointPath, QBIT_URL).toString();
-    } catch (e) {
-        addLogEntry('System', 'qbitPauseTorrents', `Invalid QBITTORRENT_URL: ${QBIT_URL}`);
-        return false;
+    if (hashes.length === 0) {
+        addLogEntry('System', 'qbitPauseTorrents', 'No torrent hashes provided to pause.');
+        return true; // No action needed, considered success
     }
+
+    const endpointPath = '/api/v2/torrents/pause';
+    const requestUrl = new URL(endpointPath, qbUrl);
+    // Append hashes to the URL query parameters
+    requestUrl.searchParams.append('hashes', hashes.join('|'));
+
+    // Log the exact URL being called, including query parameters
+    addLogEntry('System', 'qbitPauseTorrents', `Attempting to pause torrents. URL: ${requestUrl.toString()}`);
 
     try {
         const response = await axios.post(
-            requestUrl,
-            new URLSearchParams({ hashes: hashesString }).toString(), // Send as application/x-www-form-urlencoded
+            requestUrl.toString(), // URL now includes hashes in query string
+            null,                  // No data in the POST body
             {
                 headers: {
-                    Cookie: sid,
-                    'Content-Type': 'application/x-www-form-urlencoded',
+                    // 'Content-Type' is not needed here as there is no form-urlencoded body
+                    'Cookie': sid,
                 },
             }
         );
 
         if (response.status === 200) {
-            addLogEntry('System', 'qbitPauseTorrents', `Successfully sent pause command for ${hashes.length} torrent(s).`);
+            addLogEntry('System', 'qbitPauseTorrents', `Successfully issued pause command for torrents: ${hashes.join(', ')}. qBittorrent response status: 200.`);
             return true;
+        } else {
+            addLogEntry('System', 'qbitPauseTorrents', `Failed to pause torrents. qBittorrent response status: ${response.status}, Data: ${JSON.stringify(response.data)}`);
+            return false;
         }
-        addLogEntry('System', 'qbitPauseTorrents', `Failed to pause torrents. Status: ${response.status}, Response: ${response.data}`);
-        return false;
     } catch (error: any) {
-        if (axios.isAxiosError(error) && error.response && error.response.status === 403) {
-            sid = ''; // Clear SID to force re-login
-            addLogEntry('System', 'qbitPauseTorrents', 'qBittorrent session expired. Attempting re-login.');
-            const loggedIn = await login();
-            if (loggedIn) {
-                // Retry the request once after re-login
-                try {
-                    const retryResponse = await axios.post(
-                        requestUrl, // Use the same robustly constructed URL
-                        new URLSearchParams({ hashes: hashesString }).toString(),
-                        {
-                            headers: {
-                                Cookie: sid,
-                                'Content-Type': 'application/x-www-form-urlencoded',
-                            },
-                        }
-                    );
-                    if (retryResponse.status === 200) {
-                        addLogEntry('System', 'qbitPauseTorrents', `Successfully sent pause command for ${hashes.length} torrent(s) after re-login.`);
-                        return true;
+        let errorMessage = 'Error pausing torrents.';
+        if (axios.isAxiosError(error)) {
+            const failedUrl = error.config?.url || requestUrl.toString();
+            if (error.response) {
+                errorMessage = `Error pausing torrents: ${error.response.status} - ${JSON.stringify(error.response.data)}. URL: ${failedUrl}`;
+                if (error.response.status === 403) {
+                    sid = ''; 
+                    const reLoggedIn = await login();
+                    if (reLoggedIn) {
+                        addLogEntry('System', 'qbitPauseTorrents', 'Session expired, re-logged in. Please try the command again.');
+                        errorMessage += '. Session expired and re-login attempted. Please try the command again.';
+                    } else {
+                        addLogEntry('System', 'qbitPauseTorrents', 'Session expired and re-login failed.');
+                        errorMessage += '. Session expired and re-login failed.';
                     }
-                    addLogEntry('System', 'qbitPauseTorrents', `Failed to pause torrents after re-login. Status: ${retryResponse.status}, Response: ${retryResponse.data}`);
-                    return false;
-                } catch (retryError: any) {
-                    addLogEntry('System', 'qbitPauseTorrents', `Error pausing torrents after re-login: ${retryError.message}`);
-                    return false;
+                } else if (error.response.status === 404) {
+                     errorMessage = `Error pausing torrents: 404 Not Found. URL: ${failedUrl}. This usually means the API endpoint path is incorrect or the server isn't configured for it. Double-check QBITTORRENT_URL and the API path.`;
                 }
+            } else if (error.request) {
+                errorMessage = `Error pausing torrents: No response received. URL: ${failedUrl}`;
             } else {
-                addLogEntry('System', 'qbitPauseTorrents', 'Failed to re-login to qBittorrent after session expiry.');
-                return false;
+                errorMessage = `Error pausing torrents: ${error.message}. URL: ${failedUrl}`;
             }
+        } else {
+            errorMessage = `Non-Axios error pausing torrents: ${error.toString()}. URL: ${requestUrl.toString()}`;
         }
-        addLogEntry('System', 'qbitPauseTorrents', `Error pausing torrents: ${error.message}`);
+        addLogEntry('System', 'qbitPauseTorrents', errorMessage);
         return false;
     }
 }
