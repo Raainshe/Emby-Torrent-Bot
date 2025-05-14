@@ -418,6 +418,89 @@ export async function qbitDeleteTorrents(hashes: string[], deleteFiles: boolean)
     }
 }
 
-// Add other functions like addTorrent, pauseTorrent, etc. as needed
+export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
+    if (hashes.length === 0) {
+        return true; // Nothing to pause
+    }
+    if (!sid) {
+        const loggedIn = await login();
+        if (!loggedIn) {
+            addLogEntry('System', 'qbitPauseTorrents', 'Failed to login to qBittorrent before pausing torrents.');
+            return false;
+        }
+    }
+    if (!QBIT_URL) {
+        addLogEntry('System', 'qbitPauseTorrents', 'qBittorrent URL not configured.');
+        return false;
+    }
 
-export { login as qbitLogin, getTorrents as qbitGetTorrents, getSeedingTorrents as qbitGetSeedingTorrents, addTorrentByMagnet as qbitAddTorrentByMagnet, getTorrentByHash as qbitGetTorrentByHash };
+    const hashesString = hashes.join('|');
+
+    try {
+        const response = await axios.post(
+            `${QBIT_URL}/api/v2/torrents/pause`,
+            new URLSearchParams({ hashes: hashesString }).toString(), // Send as application/x-www-form-urlencoded
+            {
+                headers: {
+                    Cookie: sid,
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+            }
+        );
+
+        // The API responds with status 200 on success, even if some hashes were not found or already paused.
+        // A more robust check might involve verifying torrent states after, but for pausing, 200 is usually sufficient.
+        if (response.status === 200) {
+            addLogEntry('System', 'qbitPauseTorrents', `Successfully sent pause command for ${hashes.length} torrent(s).`);
+            return true;
+        }
+        addLogEntry('System', 'qbitPauseTorrents', `Failed to pause torrents. Status: ${response.status}, Response: ${response.data}`);
+        return false;
+    } catch (error: any) {
+        if (axios.isAxiosError(error) && error.response && error.response.status === 403) {
+            sid = ''; // Clear SID to force re-login
+            addLogEntry('System', 'qbitPauseTorrents', 'qBittorrent session expired. Attempting re-login.');
+            const loggedIn = await login();
+            if (loggedIn) {
+                // Retry the request once after re-login
+                try {
+                    const retryResponse = await axios.post(
+                        `${QBIT_URL}/api/v2/torrents/pause`,
+                        new URLSearchParams({ hashes: hashesString }).toString(),
+                        {
+                            headers: {
+                                Cookie: sid,
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                        }
+                    );
+                    if (retryResponse.status === 200) {
+                        addLogEntry('System', 'qbitPauseTorrents', `Successfully sent pause command for ${hashes.length} torrent(s) after re-login.`);
+                        return true;
+                    }
+                    addLogEntry('System', 'qbitPauseTorrents', `Failed to pause torrents after re-login. Status: ${retryResponse.status}, Response: ${retryResponse.data}`);
+                    return false;
+                } catch (retryError: any) {
+                    addLogEntry('System', 'qbitPauseTorrents', `Error pausing torrents after re-login: ${retryError.message}`);
+                    return false;
+                }
+            } else {
+                addLogEntry('System', 'qbitPauseTorrents', 'Failed to re-login to qBittorrent after session expiry.');
+                return false;
+            }
+        }
+        addLogEntry('System', 'qbitPauseTorrents', `Error pausing torrents: ${error.message}`);
+        return false;
+    }
+}
+
+// Make sure to export all functions that are used externally, e.g., in discordClient.ts
+export {
+    login as qbitLogin,
+    getTorrents as qbitGetTorrents,
+    getSeedingTorrents as qbitGetSeedingTorrents,
+    getTorrentByHash as qbitGetTorrentByHash,
+    addTorrentByMagnet as qbitAddTorrentByMagnet,
+    // qbitDeleteTorrents is already exported by its declaration
+    // qbitPauseTorrents is already exported by its declaration
+};

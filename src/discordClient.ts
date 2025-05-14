@@ -1,7 +1,7 @@
 // Import necessary classes and types from the discord.js library.
 import { Client, Events, GatewayIntentBits, Message, SlashCommandBuilder, REST, Routes, Collection, type Interaction, type CacheType, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ComponentType, AttachmentBuilder } from "discord.js";
 // Import qBittorrent functions
-import { qbitLogin, qbitGetTorrents, qbitGetSeedingTorrents, qbitAddTorrentByMagnet, qbitGetTorrentByHash, type TorrentInfo, qbitDeleteTorrents } from './qbittorrent';
+import { qbitLogin, qbitGetTorrents, qbitGetSeedingTorrents, qbitAddTorrentByMagnet, qbitGetTorrentByHash, type TorrentInfo, qbitDeleteTorrents, qbitPauseTorrents } from './qbittorrent';
 // Import utility functions
 import { createProgressBar, formatDuration, formatSpeed, formatSize } from './utils/displayUtils';
 import { addLogEntry, getRecentLogs } from './utils/logUtils'; // Import logging functions
@@ -132,6 +132,7 @@ const slashCommands = [
             option.setName('path')
                 .setDescription('The path to check disk space for (e.g., /mnt/c/downloads or C:\\\\Downloads).')
                 .setRequired(false)),
+    new SlashCommandBuilder().setName('stopallseeds').setDescription('Pauses all currently seeding torrents.'),
     new SlashCommandBuilder().setName('logs').setDescription('Displays the most recent bot activity logs.'),
     new SlashCommandBuilder().setName('help').setDescription('Displays a list of all available slash commands and their descriptions.')
 ];
@@ -521,6 +522,36 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
                 addLogEntry(user, `/${commandName}`, `Error for path ${finalPathToCheck} (original requested: ${determinedPath}): ${errorMessage}`);
             }
 
+        } else if (commandName === 'stopallseeds') {
+            addLogEntry(user, `/${commandName}`, 'Attempting to stop all seeding torrents.');
+            await interaction.deferReply();
+
+            const seedingResult = await qbitGetSeedingTorrents();
+
+            if (seedingResult.error) {
+                await interaction.editReply(`Error fetching seeding torrents: ${seedingResult.error}`);
+                addLogEntry(user, `/${commandName}`, `Error fetching seeding torrents: ${seedingResult.error}`);
+                return;
+            }
+
+            if (!seedingResult.torrents || seedingResult.torrents.length === 0) {
+                await interaction.editReply('No torrents are currently seeding.');
+                addLogEntry(user, `/${commandName}`, 'No seeding torrents found to stop.');
+                return;
+            }
+
+            const hashesToPause = seedingResult.torrents.map(t => t.hash);
+            addLogEntry(user, `/${commandName}`, `Found ${hashesToPause.length} seeding torrent(s) to pause: ${hashesToPause.join(', ')}`);
+
+            const pauseSuccess = await qbitPauseTorrents(hashesToPause);
+
+            if (pauseSuccess) {
+                await interaction.editReply(`Successfully sent command to pause ${hashesToPause.length} seeding torrent(s).`);
+                addLogEntry(user, `/${commandName}`, `Successfully paused ${hashesToPause.length} torrent(s).`);
+            } else {
+                await interaction.editReply('Failed to pause some or all seeding torrent(s). Check qBittorrent and bot logs.');
+                addLogEntry(user, `/${commandName}`, 'Failed to pause seeding torrent(s).');
+            }
         } else if (commandName === 'logs') {
             addLogEntry(user, `/${commandName}`, 'Requesting last 20 log entries');
             await interaction.deferReply();
