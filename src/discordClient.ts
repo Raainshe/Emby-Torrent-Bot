@@ -1,10 +1,12 @@
 // Import necessary classes and types from the discord.js library.
 import { Client, Events, GatewayIntentBits, Message, SlashCommandBuilder, REST, Routes, Collection, type Interaction, type CacheType, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ComponentType, AttachmentBuilder } from "discord.js";
 // Import qBittorrent functions
-import { qbitLogin, qbitGetTorrents, qbitGetSeedingTorrents, qbitAddTorrentByMagnet, qbitGetTorrentByHash, type TorrentInfo, qbitDeleteTorrents } from './qbittorrent';
+import { qbitLogin, qbitGetTorrents, qbitGetSeedingTorrents, qbitAddTorrentByMagnet, qbitGetTorrentByHash, type TorrentInfo, qbitDeleteTorrents, qbitPauseTorrents } from './qbittorrent';
 // Import utility functions
 import { createProgressBar, formatDuration, formatSpeed, formatSize } from './utils/displayUtils';
 import { addLogEntry, getRecentLogs } from './utils/logUtils'; // Import logging functions
+// Import seeding manager
+import { startSeedingManager, markTorrentCompleted, trackTorrentForSeeding, removeTorrentTracking, getSeedingStatus } from './utils/seedingManager';
 import dotenv from 'dotenv';
 import * as diskusage from 'diskusage'; // For disk space
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas'; // For chart generation
@@ -96,6 +98,7 @@ const client = new DiscordClient({
 const slashCommands = [
     new SlashCommandBuilder().setName('torrents').setDescription('Lists all current torrents with their status and progress.'),
     new SlashCommandBuilder().setName('seed').setDescription('Lists all torrents that are currently seeding.'),
+    new SlashCommandBuilder().setName('seedstatus').setDescription('Shows seeding time management status for all tracked torrents.'),
     new SlashCommandBuilder().setName('addmagnet')
         .setDescription('Adds a new torrent using the provided magnet link.')
         .addStringOption(option =>
@@ -182,6 +185,9 @@ client.once(Events.ClientReady, async (readyClient) => {
     if (qbitLoggedIn) {
         console.log("Successfully logged into qBittorrent."); // Log qBittorrent login success
         addLogEntry('System', 'QbitLogin', 'Successfully logged into qBittorrent WebUI.');
+        
+        // Start the seeding manager
+        startSeedingManager();
     } else {
         console.warn("Initial login to qBittorrent failed. Check .env configuration and qBittorrent status.");
         addLogEntry('System', 'QbitLoginFailure', 'Failed to login to qBittorrent WebUI. Check config and qBit status.');
@@ -256,6 +262,62 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
                 await interaction.editReply('No torrents are currently being seeded, or an issue occurred.');
                 addLogEntry(user, `/${commandName}`, 'No torrents are currently being seeded, or an issue occurred.');
             }
+        } else if (commandName === 'seedstatus') {
+            addLogEntry(user, `/${commandName}`, 'Fetching seeding time management status');
+            await interaction.deferReply();
+            
+            try {
+                const seedingStatus = getSeedingStatus();
+                
+                if (seedingStatus.length === 0) {
+                    await interaction.editReply('No torrents are currently being tracked for seeding time management.');
+                    addLogEntry(user, `/${commandName}`, 'No torrents being tracked for seeding.');
+                    return;
+                }
+                
+                let reply = '**Seeding Time Management Status:**\n';
+                const now = Math.floor(Date.now() / 1000);
+                
+                for (const tracking of seedingStatus) {
+                    reply += `\n**${tracking.name}**\n`;
+                    
+                    if (tracking.downloadCompletionTime && tracking.downloadDuration && tracking.seedingStopTime) {
+                        const timeRemaining = tracking.seedingStopTime - now;
+                        const downloadMinutes = Math.round(tracking.downloadDuration / 60);
+                        const seedingHours = Math.round(tracking.downloadDuration * 10 / 3600);
+                        
+                        if (tracking.stopped) {
+                            reply += `  ✅ Seeding stopped (exceeded 10x download time)\n`;
+                            reply += `  📥 Download time: ${downloadMinutes} minutes\n`;
+                            reply += `  📤 Seeded for: ${seedingHours} hours\n`;
+                        } else if (timeRemaining <= 0) {
+                            reply += `  ⏰ Should be stopped (time exceeded)\n`;
+                            reply += `  📥 Download time: ${downloadMinutes} minutes\n`;
+                            reply += `  📤 Target seeding time: ${seedingHours} hours\n`;
+                        } else {
+                            const hoursRemaining = Math.round(timeRemaining / 3600);
+                            reply += `  🌱 Currently seeding\n`;
+                            reply += `  📥 Download time: ${downloadMinutes} minutes\n`;
+                            reply += `  ⏳ Time remaining: ${hoursRemaining} hours\n`;
+                        }
+                    } else {
+                        const downloadStartedAgo = Math.round((now - tracking.downloadStartTime) / 3600);
+                        reply += `  📥 Downloading (started ${downloadStartedAgo} hours ago)\n`;
+                    }
+                }
+                
+                if (reply.length > 1950) {
+                    const cutOffMessage = '... (list truncated due to length)';
+                    reply = reply.substring(0, 1950 - cutOffMessage.length) + cutOffMessage;
+                }
+                
+                await interaction.editReply(reply);
+                addLogEntry(user, `/${commandName}`, `Successfully displayed seeding status for ${seedingStatus.length} torrents.`);
+                
+            } catch (error) {
+                await interaction.editReply('Error fetching seeding status.');
+                addLogEntry(user, `/${commandName}`, `Error fetching seeding status: ${error instanceof Error ? error.message : String(error)}`);
+            }
         } else if (commandName === 'addmagnet') {
             const magnetUrl = interaction.options.getString('link', true);
             const category = interaction.options.getString('category') || 'series'; // Default to 'series' if not provided
@@ -303,6 +365,9 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
                 if (result.torrent && result.torrent.hash) {
                     let replyText = `Successfully added torrent: **${result.torrent.name}**\n`;
                     replyText += `  ${createProgressBar(result.torrent.progress, result.torrent.dlspeed, result.torrent.num_seeds, result.torrent.num_leechs)}\n`;
+                    
+                    // Start tracking torrent for seeding time management
+                    trackTorrentForSeeding(result.torrent);
                     
                     const sentMessage = await interaction.followUp({ content: replyText, fetchReply: true });
                     
@@ -621,6 +686,11 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
             pendingDeletions.delete(originalInteractionId);
 
             if (success) {
+                // Remove tracking for deleted torrents
+                for (const hash of details.hashes) {
+                    removeTorrentTracking(hash);
+                }
+                
                 await interaction.followUp({ content: `Successfully deleted ${details.hashes.length} torrent(s).`, ephemeral: true });
                 addLogEntry(user, `/delete (confirm success)`, `Successfully deleted ${details.hashes.length} torrents. Files deleted: ${details.deleteFiles}`);
             } else {
@@ -653,6 +723,10 @@ async function updateTrackedTorrents() {
                 const durationSeconds = (completionTime - (trackedInfo.addedOn * 1000)) / 1000; // addedOn is in seconds
                 messageContent += `Status: Completed! Total time: ${formatDuration(durationSeconds)}\n`;
                 addLogEntry('System', 'TorrentComplete', `${trackedInfo.torrentName} completed. Total time: ${formatDuration(durationSeconds)}`);
+                
+                // Mark torrent as completed for seeding time management
+                markTorrentCompleted(torrent);
+                
                 trackedInfo.isCompleted = true; // Mark as completed to stop further updates
                 activeTorrentMessages.delete(hash); // Remove from active tracking
             } else if (torrent.state.toLowerCase().includes('error') || torrent.state.toLowerCase().includes('stalled')) {

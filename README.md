@@ -6,10 +6,12 @@ This Discord bot allows users to interact with a qBittorrent client through Disc
 
 *   **List Torrents (`/torrents`):** Displays all current torrents, their status, progress, download speed, and connected seeders/leechers.
 *   **List Seeding Torrents (`/seed`):** Shows only torrents that are currently seeding.
+*   **Seeding Time Management (`/seedstatus`):** Shows the status of automatic seeding time limits for all tracked torrents.
 *   **Add Magnet Link (`/addmagnet link:<magnet_link> [category:<category>]`):** Adds a new torrent to qBittorrent.
     *   `link`: The magnet link of the torrent to add.
     *   `category` (optional): Specifies the download category ('series', 'movie', 'anime'), which determines the save path based on environment variables. Defaults to 'series'.
     *   The bot will post a message with the torrent's progress and update it dynamically.
+    *   **Automatic seeding tracking:** The bot automatically tracks download time and will stop seeding after 10x the download duration.
 *   **Delete Torrents (`/delete category:<category> delete_files:<boolean>`):** Interactively select and delete torrents from qBittorrent.
     *   `category`: Filters torrents by category ('series', 'movie', 'anime') based on their save paths.
     *   `delete_files`: If true, torrent files will also be deleted from the disk.
@@ -17,6 +19,7 @@ This Discord bot allows users to interact with a qBittorrent client through Disc
     *   `path` (optional): The path to check (e.g., `/mnt/data` or `D:\\Downloads`). If not provided, uses the path from the `DISK_SPACE_CHECK_PATH` environment variable, or an OS-specific default.
     *   Includes a pie chart visualization of used and available space.
 *   **Download Duration:** When a torrent completes, the bot displays how long it took to download.
+*   **Automatic Seeding Time Management:** The bot automatically tracks torrents and stops seeding them after they've been seeded for 10 times their download duration. This helps maintain good seeding ratios while preventing indefinite seeding.
 *   **View Logs (`/logs`):** Shows the last 20 entries from the bot activity log.
 *   **List Commands (`/help`):** Displays all available slash commands and their descriptions.
 *   **Activity Logging:** Logs command usage, torrent additions, completions, and errors to `bot_activity.log`.
@@ -25,6 +28,20 @@ This Discord bot allows users to interact with a qBittorrent client through Disc
 ## How It Works
 
 The bot connects to Discord and listens for slash commands. When a command is received, it interacts with the qBittorrent WebUI API to perform actions. For torrents added via `/addmagnet`, the bot periodically polls the qBittorrent API to get progress updates and edits its original Discord message to reflect these changes.
+
+### Automatic Seeding Time Management
+
+The bot includes an intelligent seeding time management system that automatically stops seeding torrents after an appropriate duration:
+
+1. **Tracking:** When a torrent is added via `/addmagnet`, the bot automatically starts tracking its download time.
+2. **Completion Detection:** When a torrent completes downloading, the bot calculates the total download duration.
+3. **Seeding Time Calculation:** The bot sets a seeding stop time equal to 10 times the download duration (10x multiplier).
+4. **Automatic Stopping:** The bot checks every 5 minutes for torrents that have exceeded their seeding time limit and automatically pauses them.
+5. **Status Monitoring:** Use `/seedstatus` to view the current seeding time management status for all tracked torrents.
+
+**Example:** If a torrent takes 30 minutes to download, it will be automatically stopped from seeding after 5 hours (30 minutes × 10) of seeding time.
+
+This system helps maintain good seeding ratios while preventing torrents from seeding indefinitely, which is especially useful for private trackers with ratio requirements.
 
 ## Setup
 
@@ -106,7 +123,8 @@ DISK_SPACE_CHECK_PATH=/ # Optional: Default path for the /diskspace command (e.g
     └── utils/
         ├── displayUtils.ts # Utility functions for creating progress bars and formatting data
         ├── logUtils.ts     # Utility functions for logging bot activity
-        └── networkUtils.ts # (Currently unused, was for IP logging)
+        ├── networkUtils.ts # (Currently unused, was for IP logging)
+        └── seedingManager.ts # Automatic seeding time management and torrent tracking
 ```
 
 This project was created using `bun init`. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
