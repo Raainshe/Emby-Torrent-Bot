@@ -418,6 +418,112 @@ export async function qbitDeleteTorrents(hashes: string[], deleteFiles: boolean)
     }
 }
 
+/**
+ * Pauses torrents in qBittorrent (stops seeding/downloading).
+ * @param hashes An array of torrent hashes to pause.
+ * @returns True if the pause operation was successful, false otherwise.
+ */
+export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
+    if (!sid) {
+        const loggedIn = await login();
+        if (!loggedIn) {
+            addLogEntry('System', 'qbitPauseTorrents', 'Login failed, cannot pause torrents.');
+            return false;
+        }
+    }
+
+    const qbUrl = process.env.QBITTORRENT_URL;
+    if (!qbUrl) {
+        addLogEntry('System', 'qbitPauseTorrents', 'qBittorrent URL is not configured.');
+        return false;
+    }
+
+    // Construct the data as application/x-www-form-urlencoded
+    const params = new URLSearchParams();
+    params.append('hashes', hashes.join('|'));
+
+    // Debug logging
+    addLogEntry('System', 'qbitPauseTorrents', `Debug: Sending hashes: ${hashes.join('|')} to endpoint: ${qbUrl}/api/v2/torrents/stop`);
+    addLogEntry('System', 'qbitPauseTorrents', `Debug: Request body: ${params.toString()}`);
+    addLogEntry('System', 'qbitPauseTorrents', `Debug: Number of hashes to pause: ${hashes.length}`);
+    addLogEntry('System', 'qbitPauseTorrents', `Debug: Individual hashes: ${JSON.stringify(hashes)}`);
+
+    try {
+        const response = await axios.post(
+            `${qbUrl}/api/v2/torrents/stop`,
+            params.toString(),
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Cookie': sid,
+                },
+            }
+        );
+
+        addLogEntry('System', 'qbitPauseTorrents', `Debug: Response status: ${response.status}, Response data: ${JSON.stringify(response.data)}`);
+        addLogEntry('System', 'qbitPauseTorrents', `Debug: Full request URL: ${qbUrl}/api/v2/torrents/stop`);
+        addLogEntry('System', 'qbitPauseTorrents', `Debug: Request headers: ${JSON.stringify({ 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': sid ? 'Cookie present' : 'No cookie' })}`);
+
+        if (response.status === 200) {
+            addLogEntry('System', 'qbitPauseTorrents', `Successfully paused torrents: ${hashes.join(', ')}`);
+            return true;
+        } else {
+            addLogEntry('System', 'qbitPauseTorrents', `Failed to pause torrents. Status: ${response.status} - ${response.data}`);
+            return false;
+        }
+    } catch (error: any) {
+        let errorMessage = 'Unknown error';
+        if (error.response) {
+            errorMessage = `AxiosError: Request failed with status code ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`;
+            
+            // Handle 403 Forbidden - session might have expired
+            if (error.response.status === 403) {
+                addLogEntry('System', 'qbitPauseTorrents', 'Session expired, attempting to re-login and retry...');
+                sid = ''; // Clear SID
+                const reLoggedIn = await login();
+                if (reLoggedIn && qbUrl) {
+                    try {
+                        // Retry the request once after re-login
+                        const retryResponse = await axios.post(
+                            `${qbUrl}/api/v2/torrents/stop`,
+                            params.toString(),
+                            {
+                                headers: {
+                                    'Content-Type': 'application/x-www-form-urlencoded',
+                                    'Cookie': sid,
+                                },
+                            }
+                        );
+                        
+                        addLogEntry('System', 'qbitPauseTorrents', `Debug: Retry response status: ${retryResponse.status}, Response data: ${JSON.stringify(retryResponse.data)}`);
+                        
+                        if (retryResponse.status === 200) {
+                            addLogEntry('System', 'qbitPauseTorrents', `Successfully paused torrents after re-login: ${hashes.join(', ')}`);
+                            return true;
+                        } else {
+                            addLogEntry('System', 'qbitPauseTorrents', `Failed to pause torrents after re-login. Status: ${retryResponse.status} - ${retryResponse.data}`);
+                            return false;
+                        }
+                    } catch (retryError: any) {
+                        addLogEntry('System', 'qbitPauseTorrents', `Error pausing torrents after re-login: ${retryError.message}`);
+                        return false;
+                    }
+                } else {
+                    addLogEntry('System', 'qbitPauseTorrents', 'Failed to re-login to qBittorrent after session expiry.');
+                    return false;
+                }
+            }
+        } else if (error.request) {
+            errorMessage = 'AxiosError: No response received from qBittorrent.';
+        } else {
+            errorMessage = error.message;
+        }
+        console.error('Error pausing torrents:', error);
+        addLogEntry('System', 'qbitPauseTorrents', `Error pausing torrents: ${errorMessage}`);
+        return false;
+    }
+}
+
 // Add other functions like addTorrent, pauseTorrent, etc. as needed
 
 export { login as qbitLogin, getTorrents as qbitGetTorrents, getSeedingTorrents as qbitGetSeedingTorrents, addTorrentByMagnet as qbitAddTorrentByMagnet, getTorrentByHash as qbitGetTorrentByHash };
