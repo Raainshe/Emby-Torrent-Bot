@@ -6,7 +6,7 @@ import { qbitLogin, qbitGetTorrents, qbitGetSeedingTorrents, qbitAddTorrentByMag
 import { createProgressBar, formatDuration, formatSpeed, formatSize } from './utils/displayUtils';
 import { addLogEntry, getRecentLogs } from './utils/logUtils'; // Import logging functions
 // Import seeding manager
-import { startSeedingManager, markTorrentCompleted, trackTorrentForSeeding, removeTorrentTracking, getSeedingStatus } from './utils/seedingManager';
+import { startSeedingManager, markTorrentCompleted, trackTorrentForSeeding, removeTorrentTracking, getSeedingStatus, manuallyStopSeeding } from './utils/seedingManager';
 import dotenv from 'dotenv';
 import * as diskusage from 'diskusage'; // For disk space
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas'; // For chart generation
@@ -39,6 +39,9 @@ const POLLING_INTERVAL_MS = 10000; // Poll every 10 seconds, adjust as needed
 
 // Map to store pending deletion operations <interactionId, { hashes: string[], deleteFiles: boolean }>
 const pendingDeletions = new Map<string, { hashes: string[], deleteFiles: boolean }>();
+
+// Map to store pending seed stop operations <interactionId, string[]>
+const pendingSeedStops = new Map<string, string[]>();
 
 // Helper function to normalize paths for comparison, especially between WSL and Windows
 function normalizePathForComparison(path: string): string {
@@ -99,6 +102,8 @@ const slashCommands = [
     new SlashCommandBuilder().setName('torrents').setDescription('Lists all current torrents with their status and progress.'),
     new SlashCommandBuilder().setName('seed').setDescription('Lists all torrents that are currently seeding.'),
     new SlashCommandBuilder().setName('seedstatus').setDescription('Shows seeding time management status for all tracked torrents.'),
+    new SlashCommandBuilder().setName('stopallseeds').setDescription('Stops seeding for all currently seeding torrents (with confirmation).'),
+    new SlashCommandBuilder().setName('stopspecificseeds').setDescription('Select and stop seeding for specific torrents.'),
     new SlashCommandBuilder().setName('addmagnet')
         .setDescription('Adds a new torrent using the provided magnet link.')
         .addStringOption(option =>
@@ -317,6 +322,105 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
             } catch (error) {
                 await interaction.editReply('Error fetching seeding status.');
                 addLogEntry(user, `/${commandName}`, `Error fetching seeding status: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        } else if (commandName === 'stopallseeds') {
+            addLogEntry(user, `/${commandName}`, 'Initiated stop all seeds command');
+            await interaction.deferReply({ ephemeral: true });
+
+            try {
+                const result = await qbitGetSeedingTorrents();
+                if (result.error || !result.torrents) {
+                    await interaction.editReply(`Error fetching seeding torrents: ${result.error || 'No torrents data'}`);
+                    addLogEntry(user, `/${commandName}`, `Error fetching seeding torrents: ${result.error || 'No torrents data'}`);
+                    return;
+                }
+
+                if (result.torrents.length === 0) {
+                    await interaction.editReply('No torrents are currently seeding.');
+                    addLogEntry(user, `/${commandName}`, 'No seeding torrents found');
+                    return;
+                }
+
+                const seedingHashes = result.torrents.map(t => t.hash);
+                
+                // Store for confirmation
+                pendingSeedStops.set(interaction.id, seedingHashes);
+
+                const confirmButton = new ButtonBuilder()
+                    .setCustomId(`stopallseeds-confirm:${interaction.id}`)
+                    .setLabel('Confirm Stop All')
+                    .setStyle(ButtonStyle.Danger);
+
+                const cancelButton = new ButtonBuilder()
+                    .setCustomId(`stopallseeds-cancel:${interaction.id}`)
+                    .setLabel('Cancel')
+                    .setStyle(ButtonStyle.Secondary);
+
+                const row = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButton, cancelButton);
+
+                await interaction.editReply({
+                    content: `⚠️ **Stop All Seeds Confirmation**\n\nAre you sure you want to stop seeding for **${result.torrents.length}** torrents?\n\nTorrents that will be stopped:\n${result.torrents.map(t => `• ${t.name}`).slice(0, 10).join('\n')}${result.torrents.length > 10 ? `\n... and ${result.torrents.length - 10} more` : ''}`,
+                    components: [row],
+                });
+                addLogEntry(user, `/${commandName}`, `Confirmation presented for stopping ${result.torrents.length} seeding torrents`);
+
+            } catch (error) {
+                await interaction.editReply('Error processing stop all seeds command.');
+                addLogEntry(user, `/${commandName}`, `Error processing command: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        } else if (commandName === 'stopspecificseeds') {
+            addLogEntry(user, `/${commandName}`, 'Initiated stop specific seeds command');
+            await interaction.deferReply({ ephemeral: true });
+
+            try {
+                const result = await qbitGetSeedingTorrents();
+                if (result.error || !result.torrents) {
+                    await interaction.editReply(`Error fetching seeding torrents: ${result.error || 'No torrents data'}`);
+                    addLogEntry(user, `/${commandName}`, `Error fetching seeding torrents: ${result.error || 'No torrents data'}`);
+                    return;
+                }
+
+                if (result.torrents.length === 0) {
+                    await interaction.editReply('No torrents are currently seeding.');
+                    addLogEntry(user, `/${commandName}`, 'No seeding torrents found');
+                    return;
+                }
+
+                const options = result.torrents.slice(0, 25).map(torrent => ({
+                    label: torrent.name.substring(0, 100), // Max label length is 100
+                    description: `Ratio: ${torrent.ratio.toFixed(2)} | Upload: ${(torrent.uploaded / (1024 * 1024 * 1024)).toFixed(2)} GB`.substring(0, 100),
+                    value: torrent.hash,
+                }));
+
+                const selectMenu = new StringSelectMenuBuilder()
+                    .setCustomId(`stopseeds-select:${interaction.id}`)
+                    .setPlaceholder('Select torrent(s) to stop seeding')
+                    .setMinValues(1)
+                    .setMaxValues(Math.min(options.length, 25))
+                    .addOptions(options);
+                
+                const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+
+                const cancelButton = new ButtonBuilder()
+                    .setCustomId(`stopseeds-cancel-initial:${interaction.id}`)
+                    .setLabel('Cancel')
+                    .setStyle(ButtonStyle.Secondary);
+                const buttonRow = new ActionRowBuilder<ButtonBuilder>().addComponents(cancelButton);
+
+                let replyContent = `**Stop Specific Seeds**\n\nFound ${result.torrents.length} seeding torrent(s). Select which ones to stop seeding:`;
+                if (result.torrents.length > 25) {
+                    replyContent += `\n\n*(Showing first 25 torrents. Stopping more than 25 at once is not currently supported via this menu.)*`;
+                }
+                
+                await interaction.editReply({
+                    content: replyContent,
+                    components: [row, buttonRow],
+                });
+                addLogEntry(user, `/${commandName}`, `Presented ${options.length} seeding torrents for selection`);
+
+            } catch (error) {
+                await interaction.editReply('Error processing stop specific seeds command.');
+                addLogEntry(user, `/${commandName}`, `Error processing command: ${error instanceof Error ? error.message : String(error)}`);
             }
         } else if (commandName === 'addmagnet') {
             const magnetUrl = interaction.options.getString('link', true);
@@ -663,6 +767,41 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
                 components: [row],
             });
             addLogEntry(user, `/delete (select)`, `Confirmation presented for ${selectedHashes.length} torrents.`);
+        } else if (actionPrefix === 'stopseeds-select' && originalInteractionId) {
+            const selectedHashes = interaction.values;
+            addLogEntry(user, `/stopspecificseeds (select)`, `Selected ${selectedHashes.length} torrents to stop seeding. Interaction: ${originalInteractionId}`);
+
+            if (selectedHashes.length === 0) {
+                await interaction.update({ content: 'No torrents selected. Operation cancelled.', components: [] });
+                return;
+            }
+
+            // Store for confirmation step
+            pendingSeedStops.set(originalInteractionId, selectedHashes);
+
+            const torrentResult = await qbitGetSeedingTorrents(); // Re-fetch to get names for confirmation
+            const selectedTorrentNames = selectedHashes.map(hash => {
+                const torrent = torrentResult.torrents?.find(t => t.hash === hash);
+                return torrent ? torrent.name : `Unknown torrent (hash: ${hash.substring(0,8)}...)`;
+            });
+
+            const confirmButton = new ButtonBuilder()
+                .setCustomId(`stopseeds-confirm-final:${originalInteractionId}`)
+                .setLabel('Confirm Stop Seeding')
+                .setStyle(ButtonStyle.Danger);
+
+            const cancelButton = new ButtonBuilder()
+                .setCustomId(`stopseeds-cancel-final:${originalInteractionId}`)
+                .setLabel('Cancel')
+                .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder<ButtonBuilder>().addComponents(confirmButton, cancelButton);
+
+            await interaction.update({
+                content: `⚠️ **Stop Seeding Confirmation**\n\nAre you sure you want to stop seeding for the following ${selectedHashes.length} torrent(s)?\n\n${selectedTorrentNames.map(name => `• ${name}`).join('\n')}`,
+                components: [row],
+            });
+            addLogEntry(user, `/stopspecificseeds (select)`, `Confirmation presented for ${selectedHashes.length} torrents.`);
         }
     } else if (interaction.isButton()) {
         const [actionPrefix, ...params] = interaction.customId.split(':');
@@ -680,7 +819,7 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
             }
             addLogEntry(user, `/delete (confirm)`, `Confirmed deletion for ${details.hashes.length} torrents. Delete files: ${details.deleteFiles}. Interaction: ${originalInteractionId}`);
 
-            await interaction.update({ content: `Deleting ${details.hashes.length} torrent(s)... (Files ${details.deleteFiles ? 'WILL' : 'WILL NOT'} be deleted)`, components: [] });
+            await interaction.update({ content: `Deleting ${details.hashes.length} torrent(s)... (Files ${details.deleteFiles ? '' : 'WILL NOT'} be deleted)`, components: [] });
 
             const success = await qbitDeleteTorrents(details.hashes, details.deleteFiles);
             pendingDeletions.delete(originalInteractionId);
@@ -701,6 +840,59 @@ client.on(Events.InteractionCreate, async (interaction: Interaction<CacheType>) 
             addLogEntry(user, `/delete (cancel final)`, `Cancelled final deletion confirmation for interaction ${originalInteractionId}`);
             pendingDeletions.delete(originalInteractionId);
             await interaction.update({ content: 'Torrent deletion cancelled.', components: [] });
+        } else if (actionPrefix === 'stopseeds-confirm-final' && originalInteractionId) {
+            const selectedHashes = pendingSeedStops.get(originalInteractionId);
+            if (!selectedHashes) {
+                await interaction.update({ content: 'Error: Could not find selected torrents. The request may have timed out. Please try again.', components: [] });
+                addLogEntry(user, `/stopspecificseeds (confirm error)`, `No pending seed stop details found for ${originalInteractionId}`);
+                return;
+            }
+            addLogEntry(user, `/stopspecificseeds (confirm)`, `Confirmed seed stop for ${selectedHashes.length} torrents. Interaction: ${originalInteractionId}`);
+
+            await interaction.update({ content: `Stopping seeding for ${selectedHashes.length} torrents...`, components: [] });
+
+            const success = await manuallyStopSeeding(selectedHashes);
+            pendingSeedStops.delete(originalInteractionId);
+            
+            if (success) {
+                await interaction.followUp({ content: `Successfully stopped seeding for ${selectedHashes.length} torrents.`, ephemeral: true });
+                addLogEntry(user, `/stopspecificseeds (confirm success)`, `Successfully stopped seeding for ${selectedHashes.length} torrents. Interaction: ${originalInteractionId}`);
+            } else {
+                await interaction.followUp({ content: 'Failed to stop seeding for some or all selected torrents. Check qBittorrent and bot logs.', ephemeral: true });
+                addLogEntry(user, `/stopspecificseeds (confirm failure)`, `Failed to stop seeding for torrents. Hashes: ${selectedHashes.join(', ')}. Interaction: ${originalInteractionId}`);
+            }
+        } else if (actionPrefix === 'stopseeds-cancel-final' && originalInteractionId) {
+            addLogEntry(user, `/stopspecificseeds (cancel final)`, `Cancelled final seed stop confirmation for interaction ${originalInteractionId}`);
+            pendingSeedStops.delete(originalInteractionId);
+            await interaction.update({ content: 'Torrent seed stop cancelled.', components: [] });
+        } else if (actionPrefix === 'stopseeds-cancel-initial' && originalInteractionId) {
+            addLogEntry(user, `/stopspecificseeds (cancel initial)`, `Cancelled seed stop process for interaction ${originalInteractionId}`);
+            await interaction.update({ content: 'Torrent seed stop process cancelled.', components: [] });
+        } else if (actionPrefix === 'stopallseeds-confirm' && originalInteractionId) {
+            const seedingHashes = pendingSeedStops.get(originalInteractionId);
+            if (!seedingHashes) {
+                await interaction.update({ content: 'Error: Could not find seeding torrents. The request may have timed out. Please try again.', components: [] });
+                addLogEntry(user, `/stopallseeds (confirm error)`, `No pending seed stop details found for ${originalInteractionId}`);
+                return;
+            }
+            addLogEntry(user, `/stopallseeds (confirm)`, `Confirmed stop all seeds for ${seedingHashes.length} torrents. Interaction: ${originalInteractionId}`);
+
+            await interaction.update({ content: `Stopping seeding for all ${seedingHashes.length} torrents...`, components: [] });
+
+            const success = await manuallyStopSeeding(seedingHashes);
+            pendingSeedStops.delete(originalInteractionId);
+            
+            if (success) {
+                await interaction.followUp({ content: `✅ Successfully stopped seeding for all ${seedingHashes.length} torrents.`, ephemeral: true });
+                addLogEntry(user, `/stopallseeds (confirm success)`, `Successfully stopped seeding for all ${seedingHashes.length} torrents. Interaction: ${originalInteractionId}`);
+            } else {
+                await interaction.followUp({ content: 'Failed to stop seeding for some or all torrents. Check qBittorrent and bot logs.', ephemeral: true });
+                addLogEntry(user, `/stopallseeds (confirm failure)`, `Failed to stop seeding for all torrents. Hashes: ${seedingHashes.join(', ')}. Interaction: ${originalInteractionId}`);
+            }
+        } else if (actionPrefix === 'stopallseeds-cancel' && originalInteractionId) {
+            addLogEntry(user, `/stopallseeds (cancel)`, `Cancelled stop all seeds for interaction ${originalInteractionId}`);
+            pendingSeedStops.delete(originalInteractionId);
+            await interaction.update({ content: 'Stop all seeds operation cancelled.', components: [] });
         }
     }
 });

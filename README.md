@@ -7,6 +7,8 @@ This Discord bot allows users to interact with a qBittorrent client through Disc
 *   **List Torrents (`/torrents`):** Displays all current torrents, their status, progress, download speed, and connected seeders/leechers.
 *   **List Seeding Torrents (`/seed`):** Shows only torrents that are currently seeding.
 *   **Seeding Time Management (`/seedstatus`):** Shows the status of automatic seeding time limits for all tracked torrents.
+*   **Stop All Seeds (`/stopallseeds`):** Stops seeding for all currently seeding torrents with confirmation dialog.
+*   **Stop Specific Seeds (`/stopspecificseeds`):** Select and stop seeding for specific torrents from a dropdown menu with confirmation.
 *   **Add Magnet Link (`/addmagnet link:<magnet_link> [category:<category>]`):** Adds a new torrent to qBittorrent.
     *   `link`: The magnet link of the torrent to add.
     *   `category` (optional): Specifies the download category ('series', 'movie', 'anime'), which determines the save path based on environment variables. Defaults to 'series'.

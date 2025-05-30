@@ -188,4 +188,37 @@ export function removeTorrentTracking(hash: string): void {
         torrentTimings.delete(hash);
         addLogEntry('System', 'SeedingManager', `Removed tracking for torrent: ${tracking.name}`);
     }
+}
+
+/**
+ * Manually stop seeding for specific torrents
+ * @param hashes Array of torrent hashes to stop seeding
+ * @returns True if the operation was successful, false otherwise
+ */
+export async function manuallyStopSeeding(hashes: string[]): Promise<boolean> {
+    if (hashes.length === 0) {
+        return false;
+    }
+
+    addLogEntry('System', 'SeedingManager', `Manually stopping seeding for ${hashes.length} torrents`);
+    
+    const success = await qbitPauseTorrents(hashes);
+    
+    if (success) {
+        // Mark torrents as manually stopped
+        for (const hash of hashes) {
+            const tracking = torrentTimings.get(hash);
+            if (tracking) {
+                tracking.stopped = true;
+                addLogEntry('System', 'SeedingManager', 
+                    `Manually stopped seeding: ${tracking.name}`
+                );
+            }
+        }
+        addLogEntry('System', 'SeedingManager', `Successfully manually stopped seeding for ${hashes.length} torrents`);
+        return true;
+    } else {
+        addLogEntry('System', 'SeedingManager', 'Failed to manually stop some or all torrents');
+        return false;
+    }
 } 
