@@ -35,11 +35,11 @@ The bot includes an intelligent seeding time management system that automaticall
 
 1. **Tracking:** When a torrent is added via `/addmagnet`, the bot automatically starts tracking its download time.
 2. **Completion Detection:** When a torrent completes downloading, the bot calculates the total download duration.
-3. **Seeding Time Calculation:** The bot sets a seeding stop time equal to 10 times the download duration (10x multiplier).
+3. **Seeding Time Calculation:** The bot sets a seeding stop time based on a configurable multiplier of the download duration (default: 10x, configurable via `SEEDING_TIME_MULTIPLIER` environment variable).
 4. **Automatic Stopping:** The bot checks every 5 minutes for torrents that have exceeded their seeding time limit and automatically pauses them.
 5. **Status Monitoring:** Use `/seedstatus` to view the current seeding time management status for all tracked torrents.
 
-**Example:** If a torrent takes 30 minutes to download, it will be automatically stopped from seeding after 5 hours (30 minutes × 10) of seeding time.
+**Example:** If a torrent takes 30 minutes to download and `SEEDING_TIME_MULTIPLIER=10`, it will be automatically stopped from seeding after 5 hours (30 minutes × 10) of seeding time. If you set `SEEDING_TIME_MULTIPLIER=5`, it would stop after 2.5 hours instead.
 
 This system helps maintain good seeding ratios while preventing torrents from seeding indefinitely, which is especially useful for private trackers with ratio requirements.
 
@@ -97,6 +97,9 @@ QBITTORRENT_ANIME_SAVE_PATH=/downloads/torrents/anime
 
 # Disk Space Command Configuration
 DISK_SPACE_CHECK_PATH=/ # Optional: Default path for the /diskspace command (e.g., /mnt/c or C:\\)
+
+# Seeding Time Management Configuration
+SEEDING_TIME_MULTIPLIER=10 # Optional: Multiplier for seeding time (e.g., 10 means seed for 10x download time). Defaults to 10 if not set.
 ```
 
 **Note:**

@@ -14,8 +14,15 @@ interface TorrentTimingInfo {
 // Store torrent timing information
 const torrentTimings = new Map<string, TorrentTimingInfo>();
 
-// Seeding multiplier (10x download time)
-const SEEDING_MULTIPLIER = 10;
+// Seeding multiplier (configurable via environment variable, defaults to 10x)
+const SEEDING_MULTIPLIER = (() => {
+    const multiplier = parseInt(process.env.SEEDING_TIME_MULTIPLIER || '10');
+    if (isNaN(multiplier) || multiplier <= 0) {
+        console.warn(`Invalid SEEDING_TIME_MULTIPLIER value: ${process.env.SEEDING_TIME_MULTIPLIER}. Using default value of 10.`);
+        return 10;
+    }
+    return multiplier;
+})();
 
 // Check interval in milliseconds (every 5 minutes)
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -149,7 +156,7 @@ export async function updateTorrentCompletionStatus(): Promise<void> {
  * Start the seeding manager background process
  */
 export function startSeedingManager(): void {
-    addLogEntry('System', 'SeedingManager', `Starting seeding manager with ${SEEDING_MULTIPLIER}x download time limit`);
+    addLogEntry('System', 'SeedingManager', `Starting seeding manager with ${SEEDING_MULTIPLIER}x download time limit (configurable via SEEDING_TIME_MULTIPLIER env var)`);
     
     // Run initial check
     updateTorrentCompletionStatus().then(() => {
