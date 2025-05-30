@@ -443,14 +443,14 @@ export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
     params.append('hashes', hashes.join('|'));
 
     // Debug logging
-    addLogEntry('System', 'qbitPauseTorrents', `Debug: Sending hashes: ${hashes.join('|')} to endpoint: ${qbUrl}/api/v2/torrents/pause`);
+    addLogEntry('System', 'qbitPauseTorrents', `Debug: Sending hashes: ${hashes.join('|')} to endpoint: ${qbUrl}/api/v2/torrents/stop`);
     addLogEntry('System', 'qbitPauseTorrents', `Debug: Request body: ${params.toString()}`);
     addLogEntry('System', 'qbitPauseTorrents', `Debug: Number of hashes to pause: ${hashes.length}`);
     addLogEntry('System', 'qbitPauseTorrents', `Debug: Individual hashes: ${JSON.stringify(hashes)}`);
 
     try {
         const response = await axios.post(
-            `${qbUrl}/api/v2/torrents/pause`,
+            `${qbUrl}/api/v2/torrents/stop`,
             params.toString(),
             {
                 headers: {
@@ -461,7 +461,7 @@ export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
         );
 
         addLogEntry('System', 'qbitPauseTorrents', `Debug: Response status: ${response.status}, Response data: ${JSON.stringify(response.data)}`);
-        addLogEntry('System', 'qbitPauseTorrents', `Debug: Full request URL: ${qbUrl}/api/v2/torrents/pause`);
+        addLogEntry('System', 'qbitPauseTorrents', `Debug: Full request URL: ${qbUrl}/api/v2/torrents/stop`);
         addLogEntry('System', 'qbitPauseTorrents', `Debug: Request headers: ${JSON.stringify({ 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': sid ? 'Cookie present' : 'No cookie' })}`);
 
         if (response.status === 200) {
@@ -485,7 +485,7 @@ export async function qbitPauseTorrents(hashes: string[]): Promise<boolean> {
                     try {
                         // Retry the request once after re-login
                         const retryResponse = await axios.post(
-                            `${qbUrl}/api/v2/torrents/pause`,
+                            `${qbUrl}/api/v2/torrents/stop`,
                             params.toString(),
                             {
                                 headers: {
