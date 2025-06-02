@@ -112,6 +112,8 @@ SEEDING_TIME_MULTIPLIER=10 # Optional: Multiplier for seeding time (e.g., 10 mea
 
 ## Project Structure
 
+The project follows a modular architecture with clear separation of concerns:
+
 ```
 .
 ├── .env                    # Environment variables (create this file)
@@ -120,16 +122,47 @@ SEEDING_TIME_MULTIPLIER=10 # Optional: Multiplier for seeding time (e.g., 10 mea
 ├── package.json
 ├── README.md
 ├── tsconfig.json
-├── downloads/                  # Example download location (can be configured via QBITTORRENT_DEFAULT_SAVE_PATH)
+├── downloads/              # Example download location (can be configured via environment variables)
 └── src/
-    ├── discordClient.ts    # Handles all Discord bot interaction, client setup, and event handling
-    ├── index.ts            # Main entry point for the application
-    ├── qbittorrent.ts      # Handles all qBittorrent Web API communication
-    └── utils/
-        ├── displayUtils.ts # Utility functions for creating progress bars and formatting data
-        ├── logUtils.ts     # Utility functions for logging bot activity
-        ├── networkUtils.ts # (Currently unused, was for IP logging)
-        └── seedingManager.ts # Automatic seeding time management and torrent tracking
+    ├── index.ts           # Main entry point for the application
+    ├── qbittorrent.ts     # Backward compatibility exports for qBittorrent functionality
+    ├── bot/               # Discord bot related code
+    │   ├── client.ts      # Discord client setup, initialization, and main bot logic
+    │   ├── commands/      # Slash command definitions
+    │   │   └── index.ts   # Command registration and exports
+    │   └── handlers/      # Event handlers and message processing
+    │       └── messageHandler.ts # Discord interaction handlers (placeholder)
+    ├── services/          # External service integrations
+    │   └── qbittorrent/   # qBittorrent WebUI API integration
+    │       ├── client.ts  # Low-level API client functions (login, getTorrents, etc.)
+    │       └── types.ts   # TypeScript interfaces and type definitions
+    ├── managers/          # Business logic managers
+    │   └── seedingManager.ts # Automatic seeding time management and torrent tracking
+    └── utils/             # Utility functions
+        ├── displayUtils.ts # Progress bars, formatting, and chart generation
+        ├── logUtils.ts     # Bot activity logging utilities
+        ├── networkUtils.ts # Network-related utilities (IP detection)
+        └── pathUtils.ts    # Path normalization and conversion utilities
 ```
+
+### Architecture Overview
+
+- **`src/index.ts`**: Application entry point that initializes the Discord bot
+- **`src/bot/`**: Contains all Discord-specific functionality
+  - **`client.ts`**: Main Discord client setup, event handlers, and bot initialization
+  - **`commands/`**: Slash command definitions and registration
+  - **`handlers/`**: Discord interaction and event handlers
+- **`src/services/`**: External service integrations with proper abstraction
+  - **`qbittorrent/`**: Complete qBittorrent WebUI API integration
+- **`src/managers/`**: Business logic and feature managers
+  - **`seedingManager.ts`**: Intelligent seeding time management system
+- **`src/utils/`**: Pure utility functions for common operations
+- **`src/qbittorrent.ts`**: Maintains backward compatibility during refactoring
+
+This structure promotes:
+- **Maintainability**: Related functionality is grouped together
+- **Scalability**: Easy to add new services, commands, or managers
+- **Testability**: Clear separation of concerns makes unit testing easier
+- **Modularity**: Each module has a single responsibility
 
 This project was created using `bun init`. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.

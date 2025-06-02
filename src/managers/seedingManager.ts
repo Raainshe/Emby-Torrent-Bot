@@ -1,5 +1,6 @@
-import { addLogEntry } from './logUtils';
-import { qbitGetTorrents, qbitPauseTorrents, type TorrentInfo } from '../qbittorrent';
+import { addLogEntry } from '../utils/logUtils.js';
+import { qbitGetTorrents, qbitPauseTorrents } from '../services/qbittorrent/client.js';
+import type { TorrentInfo } from '../services/qbittorrent/types.js';
 
 interface TorrentTimingInfo {
     hash: string;
