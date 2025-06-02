@@ -406,6 +406,9 @@ export function createCommandHandlers(client: Client) {
                         if (searchResults.sourceUsed) {
                             footerParts.push(`Source: ${searchResults.sourceUsed}`);
                         }
+                        if (searchResults.sourcesAttempted && searchResults.sourcesAttempted.length > 1) {
+                            footerParts.push(`Tried: ${searchResults.sourcesAttempted.join(', ')}`);
+                        }
                         footerParts.push('🎬 = Has TMDB metadata | 📁 = Basic torrent info');
                         embed.setFooter({ text: footerParts.join(' • ') });
 
