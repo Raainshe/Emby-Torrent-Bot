@@ -1,5 +1,5 @@
 import type { Client, Interaction, CacheType, Message } from 'discord.js';
-import { Events, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ComponentType, AttachmentBuilder } from 'discord.js';
+import { Events, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle, ComponentType, AttachmentBuilder, EmbedBuilder } from 'discord.js';
 import { qbitGetTorrents, qbitGetSeedingTorrents, qbitAddTorrentByMagnet, qbitGetTorrentByHash, qbitDeleteTorrents, qbitPauseTorrents } from '../../services/qbittorrent/client.js';
 import type { TorrentInfo } from '../../services/qbittorrent/types.js';
 import { createProgressBar, formatDuration, formatSpeed, formatSize } from '../../utils/displayUtils.js';
@@ -7,6 +7,8 @@ import { addLogEntry, getRecentLogs } from '../../utils/logUtils.js';
 import { getSeedingStatus, markTorrentCompleted, trackTorrentForSeeding, removeTorrentTracking, manuallyStopSeeding } from '../../managers/seedingManager.js';
 import { normalizePathForComparison, convertWindowsPathToWslPath, getDisplayNameFromMagnet } from '../../utils/pathUtils.js';
 import { availableCommandHelp } from '../commands/index.js';
+import { searchTorrentsWithMetadata, getMagnetLinkForTorrent, mapCategoryToSavePath } from '../../services/search/integration.js';
+import type { EnrichedTorrentResult } from '../../services/search/integration.js';
 import * as diskusage from 'diskusage';
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
 import os from 'os';
@@ -29,6 +31,9 @@ const pendingDeletions = new Map<string, { hashes: string[], deleteFiles: boolea
 
 // Map to store pending seed stop operations <interactionId, string[]>
 const pendingSeedStops = new Map<string, string[]>();
+
+// Map to store pending search selections <interactionId, EnrichedTorrentResult[]>
+const pendingSearchSelections = new Map<string, EnrichedTorrentResult[]>();
 
 export function createCommandHandlers(client: Client) {
     // Handle slash command interactions
@@ -283,6 +288,144 @@ export function createCommandHandlers(client: Client) {
                         await interaction.editReply(`Failed to add magnet link: ${result.error}`);
                         addLogEntry(user, `/${commandName}`, `Failed to add magnet link: ${result.error}`);
                     }
+                } else if (commandName === 'search') {
+                    const query = interaction.options.getString('query', true);
+                    const category = interaction.options.getString('category') || 'all';
+                    addLogEntry(user, `/${commandName}`, `Searching for: ${query} in category: ${category}`);
+                    await interaction.deferReply();
+
+                    try {
+                        const searchResults = await searchTorrentsWithMetadata({
+                            query,
+                            category,
+                            page: 1
+                        });
+
+                        if (searchResults.error) {
+                            const embed = new EmbedBuilder()
+                                .setColor('#ff0000')
+                                .setTitle('🚫 Search Error')
+                                .setDescription(searchResults.error);
+
+                            if (searchResults.fallbackMessage) {
+                                embed.addFields([
+                                    {
+                                        name: '💡 What you can do',
+                                        value: searchResults.fallbackMessage,
+                                        inline: false
+                                    }
+                                ]);
+                            }
+
+                            if (searchResults.sourceUsed) {
+                                embed.setFooter({ text: `Source: ${searchResults.sourceUsed}` });
+                            }
+
+                            await interaction.editReply({ embeds: [embed] });
+                            addLogEntry(user, `/${commandName}`, `Search error: ${searchResults.error}`);
+                            return;
+                        }
+
+                        if (searchResults.results.length === 0) {
+                            const embed = new EmbedBuilder()
+                                .setColor('#ffaa00')
+                                .setTitle('🔍 No Results Found')
+                                .setDescription(`No torrents found for: **${query}**`);
+
+                            if (searchResults.fallbackMessage) {
+                                embed.addFields([
+                                    {
+                                        name: '💡 Suggestions',
+                                        value: searchResults.fallbackMessage,
+                                        inline: false
+                                    }
+                                ]);
+                            }
+
+                            if (searchResults.sourceUsed) {
+                                embed.setFooter({ text: `Searched: ${searchResults.sourceUsed}` });
+                            }
+
+                            await interaction.editReply({ embeds: [embed] });
+                            addLogEntry(user, `/${commandName}`, `No results found for: ${query}`);
+                            return;
+                        }
+
+                        // Store search results for selection
+                        pendingSearchSelections.set(interaction.id, searchResults.results);
+
+                        // Create dropdown options
+                        const options = searchResults.results.slice(0, 25).map((torrent, index) => {
+                            const title = torrent.title.length > 80 ? `${torrent.title.substring(0, 77)}...` : torrent.title;
+                            const description = `📦 ${torrent.size} | 🌱 ${torrent.seeds} | 🔗 ${torrent.leeches} | 📺 ${torrent.site}`;
+                            
+                            return {
+                                label: title,
+                                description: description.substring(0, 100),
+                                value: index.toString(),
+                                emoji: torrent.tmdb ? '🎬' : '📁'
+                            };
+                        });
+
+                        const selectMenu = new StringSelectMenuBuilder()
+                            .setCustomId(`search-select:${interaction.id}`)
+                            .setPlaceholder('🔍 Select a torrent to add')
+                            .setMinValues(1)
+                            .setMaxValues(1)
+                            .addOptions(options);
+
+                        const row = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(selectMenu);
+
+                        // Create the main embed
+                        const embed = new EmbedBuilder()
+                            .setColor('#00ff00')
+                            .setTitle(`🔍 Search Results: ${query}`)
+                            .setDescription(`Found **${searchResults.results.length}** torrents in **${category}** category`)
+                            .addFields([
+                                {
+                                    name: '📋 Instructions',
+                                    value: 'Select a torrent from the dropdown below to add it to qBittorrent',
+                                    inline: false
+                                }
+                            ])
+                            .setTimestamp();
+
+                        // Add fallback message if available
+                        if (searchResults.fallbackMessage) {
+                            embed.addFields([
+                                {
+                                    name: '📊 Info',
+                                    value: searchResults.fallbackMessage,
+                                    inline: false
+                                }
+                            ]);
+                        }
+
+                        // Set footer with source and metadata info
+                        const footerParts = [];
+                        if (searchResults.sourceUsed) {
+                            footerParts.push(`Source: ${searchResults.sourceUsed}`);
+                        }
+                        footerParts.push('🎬 = Has TMDB metadata | 📁 = Basic torrent info');
+                        embed.setFooter({ text: footerParts.join(' • ') });
+
+                        // Add thumbnail if first result has TMDB data
+                        const firstResultWithPoster = searchResults.results.find(r => r.posterUrl);
+                        if (firstResultWithPoster?.posterUrl) {
+                            embed.setThumbnail(firstResultWithPoster.posterUrl);
+                        }
+
+                        await interaction.editReply({
+                            embeds: [embed],
+                            components: [row]
+                        });
+
+                        addLogEntry(user, `/${commandName}`, `Found ${searchResults.results.length} results for: ${query}`);
+
+                    } catch (error) {
+                        await interaction.editReply('❌ Error processing search request.');
+                        addLogEntry(user, `/${commandName}`, `Search error: ${error instanceof Error ? error.message : String(error)}`);
+                    }
                 } else if (commandName === 'delete') {
                     const category = interaction.options.getString('category', true);
                     const deleteFiles = interaction.options.getBoolean('delete_files', true);
@@ -508,6 +651,121 @@ export function createCommandHandlers(client: Client) {
                             components: [row],
                         });
                     }
+                } else if (customId.startsWith('search-select:')) {
+                    const interactionId = customId.split(':')[1];
+                    if (!interactionId) return;
+                    
+                    const selectedIndex = interaction.values[0];
+                    
+                    const searchResults = pendingSearchSelections.get(interactionId);
+                    
+                    if (!searchResults || !searchResults.length) {
+                        await interaction.reply({ content: 'This search request has expired. Please run the search command again.', ephemeral: true });
+                        return;
+                    }
+
+                    const selectedTorrent = searchResults[parseInt(selectedIndex || '0')];
+                    
+                    if (!selectedTorrent) {
+                        await interaction.reply({ content: 'Invalid selection.', ephemeral: true });
+                        return;
+                    }
+
+                    await interaction.deferReply();
+                    
+                    try {
+                        // Get the magnet link
+                        const magnetLink = await getMagnetLinkForTorrent(selectedTorrent);
+                        
+                        if (!magnetLink) {
+                            await interaction.editReply(`❌ Could not retrieve magnet link for: ${selectedTorrent.title}`);
+                            addLogEntry(user, 'SearchAddTorrent', `Failed to get magnet link for: ${selectedTorrent.title}`);
+                            return;
+                        }
+
+                        // Determine save category
+                        const saveCategory = mapCategoryToSavePath(selectedTorrent.category);
+                        const savePath = getSavePathByCategory(saveCategory);
+                        
+                        // Add the torrent
+                        const result = await qbitAddTorrentByMagnet(magnetLink, savePath);
+
+                        if (result.success) {
+                            // Create rich response embed
+                            const embed = new EmbedBuilder()
+                                .setColor('#00ff00')
+                                .setTitle('✅ Torrent Added Successfully')
+                                .setDescription(`**${selectedTorrent.title}**`)
+                                .addFields([
+                                    { name: '📦 Size', value: selectedTorrent.size, inline: true },
+                                    { name: '🌱 Seeds', value: selectedTorrent.seeds.toString(), inline: true },
+                                    { name: '🔗 Leeches', value: selectedTorrent.leeches.toString(), inline: true },
+                                    { name: '📂 Category', value: saveCategory, inline: true },
+                                    { name: '📺 Source', value: selectedTorrent.site, inline: true },
+                                    { name: '📅 Upload Date', value: selectedTorrent.uploadDate, inline: true }
+                                ])
+                                .setTimestamp();
+
+                            // Add TMDB metadata if available
+                            if (selectedTorrent.tmdb) {
+                                const tmdb = selectedTorrent.tmdb;
+                                const title = tmdb.title || tmdb.name || 'Unknown';
+                                const year = tmdb.release_date || tmdb.first_air_date;
+                                const rating = tmdb.vote_average ? `⭐ ${tmdb.vote_average.toFixed(1)}/10` : 'No rating';
+                                
+                                embed.addFields([
+                                    { name: '🎬 TMDB Info', value: `${title}${year ? ` (${year.split('-')[0]})` : ''}`, inline: true },
+                                    { name: '📊 Rating', value: rating, inline: true }
+                                ]);
+                                
+                                if (tmdb.overview && tmdb.overview.length > 0) {
+                                    const overview = tmdb.overview.length > 200 ? 
+                                        `${tmdb.overview.substring(0, 197)}...` : tmdb.overview;
+                                    embed.addFields([
+                                        { name: '📝 Overview', value: overview, inline: false }
+                                    ]);
+                                }
+                            }
+
+                            // Add poster if available
+                            if (selectedTorrent.posterUrl) {
+                                embed.setThumbnail(selectedTorrent.posterUrl);
+                            }
+
+                            await interaction.editReply({ embeds: [embed] });
+                            addLogEntry(user, 'SearchAddTorrent', `Successfully added torrent: ${selectedTorrent.title}`);
+
+                            // Start tracking progress
+                            if (result.torrent) {
+                                trackTorrentForSeeding(result.torrent);
+                                trackTorrentProgress(result.torrent.hash, interaction.followUp.bind(interaction), selectedTorrent.title, result.torrent.added_on);
+                            } else {
+                                // Fallback tracking like in addmagnet command
+                                setTimeout(async () => {
+                                    const torrentsResult = await qbitGetTorrents();
+                                    if (torrentsResult.torrents && torrentsResult.torrents.length > 0) {
+                                        const latestTorrent = torrentsResult.torrents.reduce((latest, current) => {
+                                            return (latest.added_on > current.added_on) ? latest : current;
+                                        });
+                                        const now = Math.floor(Date.now() / 1000);
+                                        if (latestTorrent && (now - latestTorrent.added_on < 30)) {
+                                            trackTorrentForSeeding(latestTorrent);
+                                            trackTorrentProgress(latestTorrent.hash, interaction.followUp.bind(interaction), latestTorrent.name, latestTorrent.added_on);
+                                        }
+                                    }
+                                }, 2000);
+                            }
+                        } else {
+                            await interaction.editReply(`❌ Failed to add torrent: ${result.error}`);
+                            addLogEntry(user, 'SearchAddTorrent', `Failed to add torrent: ${result.error}`);
+                        }
+                    } catch (error) {
+                        await interaction.editReply(`❌ Error adding torrent: ${error instanceof Error ? error.message : String(error)}`);
+                        addLogEntry(user, 'SearchAddTorrent', `Error adding torrent: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                    
+                    // Clean up stored search results
+                    pendingSearchSelections.delete(interactionId);
                 }
             } else if (interaction.isButton()) {
                 const customId = interaction.customId;

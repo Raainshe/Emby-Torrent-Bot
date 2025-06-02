@@ -7,6 +7,23 @@ export function registerCommands() {
         new SlashCommandBuilder().setName('seedstatus').setDescription('Shows seeding time management status for all tracked torrents.'),
         new SlashCommandBuilder().setName('stopallseeds').setDescription('Stops seeding for all currently seeding torrents (with confirmation).'),
         new SlashCommandBuilder().setName('stopspecificseeds').setDescription('Select and stop seeding for specific torrents.'),
+        new SlashCommandBuilder()
+            .setName('search')
+            .setDescription('Search for torrents across multiple sites with metadata from TMDB.')
+            .addStringOption(option =>
+                option.setName('query')
+                    .setDescription('The search query (movie/series title).')
+                    .setRequired(true))
+            .addStringOption(option =>
+                option.setName('category')
+                    .setDescription('Filter by category.')
+                    .setRequired(false)
+                    .addChoices(
+                        { name: 'All', value: 'all' },
+                        { name: 'Movies', value: 'movies' },
+                        { name: 'TV Shows', value: 'tv' },
+                        { name: 'Anime', value: 'anime' }
+                    )),
         new SlashCommandBuilder().setName('addmagnet')
             .setDescription('Adds a new torrent using the provided magnet link.')
             .addStringOption(option =>
@@ -56,6 +73,7 @@ export const availableCommandHelp = [
     { name: '/seedstatus', description: 'Shows seeding time management status for all tracked torrents.' },
     { name: '/stopallseeds', description: 'Stops seeding for all currently seeding torrents (with confirmation).' },
     { name: '/stopspecificseeds', description: 'Select and stop seeding for specific torrents.' },
+    { name: '/search', description: 'Search for torrents across multiple sites with metadata from TMDB.' },
     { name: '/addmagnet', description: 'Adds a new torrent using the provided magnet link.' },
     { name: '/delete', description: 'Deletes a torrent from qBittorrent, optionally with files.' },
     { name: '/diskspace', description: 'Shows disk space usage for a specified path or default path.' },

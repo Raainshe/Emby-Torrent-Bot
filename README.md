@@ -9,6 +9,16 @@ This Discord bot allows users to interact with a qBittorrent client through Disc
 *   **Seeding Time Management (`/seedstatus`):** Shows the status of automatic seeding time limits for all tracked torrents.
 *   **Stop All Seeds (`/stopallseeds`):** Stops seeding for all currently seeding torrents with confirmation dialog.
 *   **Stop Specific Seeds (`/stopspecificseeds`):** Select and stop seeding for specific torrents from a dropdown menu with confirmation.
+*   **Search Torrents (`/search query:<search_term> [category:<category>]`):** Search for torrents across multiple sites with rich metadata from TMDB.
+    *   `query`: The search term (movie/series title).
+    *   `category` (optional): Filter by category ('all', 'movies', 'tv', 'anime'). Defaults to 'all'.
+    *   **Features:**
+        *   Searches 1337x torrent site with automatic parsing
+        *   Enriches results with TMDB metadata (posters, ratings, descriptions)
+        *   Interactive dropdown selection with rich embeds
+        *   Automatic category mapping for save paths
+        *   Direct integration with existing `/addmagnet` functionality
+        *   Beautiful Discord embeds with movie/TV show information
 *   **Add Magnet Link (`/addmagnet link:<magnet_link> [category:<category>]`):** Adds a new torrent to qBittorrent.
     *   `link`: The magnet link of the torrent to add.
     *   `category` (optional): Specifies the download category ('series', 'movie', 'anime'), which determines the save path based on environment variables. Defaults to 'series'.
@@ -89,6 +99,9 @@ QBITTORRENT_URL=http://localhost:8080
 QBITTORRENT_USERNAME=your_qbittorrent_username
 QBITTORRENT_PASSWORD=your_qbittorrent_password
 
+# TMDB API Configuration (for search feature metadata)
+TMDB_API_KEY=your_tmdb_api_key_here # Get from https://www.themoviedb.org/settings/api
+
 # qBittorrent Save Paths (use double backslashes for Windows paths, e.g., C:\\Torrents\\Series)
 # These are used by the /addmagnet command's 'category' option.
 # QBITTORRENT_DEFAULT_SAVE_PATH is still used by /addmagnet if category is 'series' and QBITTORRENT_SERIES_SAVE_PATH is not set.
@@ -133,9 +146,17 @@ The project follows a modular architecture with clear separation of concerns:
     │   └── handlers/      # Event handlers and message processing
     │       └── messageHandler.ts # Discord interaction handlers (placeholder)
     ├── services/          # External service integrations
-    │   └── qbittorrent/   # qBittorrent WebUI API integration
-    │       ├── client.ts  # Low-level API client functions (login, getTorrents, etc.)
-    │       └── types.ts   # TypeScript interfaces and type definitions
+    │   ├── qbittorrent/   # qBittorrent WebUI API integration
+    │   │   ├── client.ts  # Low-level API client functions (login, getTorrents, etc.)
+    │   │   └── types.ts   # TypeScript interfaces and type definitions
+    │   ├── torrent-sites/ # Torrent site API integrations
+    │   │   ├── 1337x.ts   # 1337x torrent site scraping and search
+    │   │   └── types.ts   # Torrent search result types and interfaces
+    │   ├── tmdb/          # The Movie Database (TMDB) API integration
+    │   │   ├── client.ts  # TMDB API client for movie/TV metadata
+    │   │   └── types.ts   # TMDB response types and interfaces
+    │   └── search/        # Integrated search functionality
+    │       └── integration.ts # Combines torrent sites with TMDB metadata
     ├── managers/          # Business logic managers
     │   └── seedingManager.ts # Automatic seeding time management and torrent tracking
     └── utils/             # Utility functions
@@ -154,6 +175,9 @@ The project follows a modular architecture with clear separation of concerns:
   - **`handlers/`**: Discord interaction and event handlers
 - **`src/services/`**: External service integrations with proper abstraction
   - **`qbittorrent/`**: Complete qBittorrent WebUI API integration
+  - **`torrent-sites/`**: Torrent site API integrations
+  - **`tmdb/`**: The Movie Database (TMDB) API integration
+  - **`search/`**: Integrated search functionality
 - **`src/managers/`**: Business logic and feature managers
   - **`seedingManager.ts`**: Intelligent seeding time management system
 - **`src/utils/`**: Pure utility functions for common operations
